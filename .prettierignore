@@ -1,0 +1,5 @@
+src/components/ui
+dist
+src-tauri
+package-lock.json
+src/lib/wishlist/__fixtures__
