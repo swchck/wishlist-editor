@@ -1,4 +1,4 @@
-import { invoke as tauriInvoke, type InvokeArgs } from "@tauri-apps/api/core";
+import { invoke as tauriInvoke, type InvokeArgs, type InvokeOptions } from "@tauri-apps/api/core";
 
 export interface RawItem {
   slug: string;
@@ -138,9 +138,9 @@ export function handleUnauthorized(fn: () => void) {
   onUnauthorized = fn;
 }
 
-async function invoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
+async function invoke<T>(cmd: string, args?: InvokeArgs, options?: InvokeOptions): Promise<T> {
   try {
-    return await tauriInvoke<T>(cmd, args);
+    return await tauriInvoke<T>(cmd, args, options);
   } catch (e) {
     if (isAppError(e, "unauthorized")) onUnauthorized?.();
     throw e;
@@ -182,4 +182,10 @@ export const api = {
   createItem: (slug: string, text: string) => invoke<void>("create_item", { slug, text }),
   deleteItem: (slug: string) => invoke<void>("delete_item", { slug }),
   renameItem: (from: string, to: string) => invoke<void>("rename_item", { from, to }),
+
+  /** Compresses and stores a photo for the card; returns its card reference, e.g. `./images/a-1.jpg`. */
+  addPhoto: (slug: string, bytes: Uint8Array) => invoke<string>("add_photo", bytes, { headers: { "x-slug": slug } }),
+  /** Reads a photo by its path relative to the items folder, e.g. `images/a-1.jpg`. */
+  readPhoto: (path: string) => invoke<ArrayBuffer>("read_photo", { path }),
+  removePhoto: (path: string) => invoke<void>("remove_photo", { path }),
 };

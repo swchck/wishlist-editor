@@ -54,5 +54,6 @@ describe("photosOf", () => {
     expect(photosOf({ image: "https://a", images: ["./b"] })).toEqual(["https://a", "./b"]);
     expect(photosOf({ image: ["https://a", "https://b"] })).toEqual(["https://a", "https://b"]);
     expect(photosOf({})).toEqual([]);
+    expect(photosOf({ image: 5, images: ["./a", null] })).toEqual(["./a"]);
   });
 });

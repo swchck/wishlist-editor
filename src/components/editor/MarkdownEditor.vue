@@ -8,6 +8,7 @@ const props = defineProps<{ value: string; readonly?: boolean }>();
 const emit = defineEmits<{ change: [markdown: string] }>();
 const root = ref<HTMLDivElement>();
 let crepe: Crepe | null = null;
+let created = false;
 
 /**
  * Crepe scopes its menu styles under `.milkdown`, and inside the editor column the menus
@@ -26,11 +27,11 @@ function menuLayer(): HTMLElement {
 }
 
 onMounted(async () => {
-  crepe = new Crepe({
+  const editor = new Crepe({
     root: root.value!,
     defaultValue: props.value,
     // ImageBlock's default upload stores a session-only blob: URL in the markdown;
-    // photos go through the inspector until uploads into images/ exist
+    // photos belong in the card's photo list, which uploads them into images/
     features: {
       [Crepe.Feature.Latex]: false,
       [Crepe.Feature.CodeMirror]: false,
@@ -67,15 +68,22 @@ onMounted(async () => {
       },
     },
   });
-  crepe.on((l) =>
+  crepe = editor;
+  editor.on((l) =>
     // Crepe re-serializes on load; only real edits may rewrite the body, or opening
     // a card would reformat its markdown on disk
     l.markdownUpdated((_ctx, md, prev) => {
       if (md !== prev) emit("change", md);
     }),
   );
-  await crepe.create();
-  crepe.setReadonly(!!props.readonly);
+  await editor.create();
+  // switching cards quickly unmounts this before create() resolves
+  if (crepe !== editor) {
+    void editor.destroy();
+    return;
+  }
+  created = true;
+  editor.setReadonly(!!props.readonly);
   document.addEventListener("pointerdown", closeMenusOutside, true);
 });
 
@@ -91,12 +99,13 @@ function closeMenusOutside(e: PointerEvent) {
 
 watch(
   () => props.readonly,
-  (ro) => crepe?.setReadonly(!!ro),
+  (ro) => created && crepe?.setReadonly(!!ro),
 );
 
 onBeforeUnmount(() => {
   document.removeEventListener("pointerdown", closeMenusOutside, true);
-  void crepe?.destroy();
+  // a half-created editor is destroyed by onMounted once create() resolves
+  if (created) void crepe?.destroy();
   crepe = null;
 });
 </script>

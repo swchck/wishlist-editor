@@ -14,4 +14,7 @@ const applyTheme = () => document.documentElement.classList.toggle("dark", dark.
 applyTheme();
 dark.addEventListener("change", applyTheme);
 
+// a file dropped outside an editor drop zone would otherwise replace the whole app with it
+for (const type of ["dragover", "drop"]) window.addEventListener(type, (e) => e.preventDefault());
+
 createApp(App).use(createPinia()).mount("#app");

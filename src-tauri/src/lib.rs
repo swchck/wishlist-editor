@@ -4,6 +4,7 @@ mod create;
 mod error;
 mod git;
 mod github;
+mod photos;
 mod remove;
 mod workspace;
 
@@ -38,6 +39,9 @@ pub fn run() {
             commands::create_item,
             commands::delete_item,
             commands::rename_item,
+            commands::add_photo,
+            commands::read_photo,
+            commands::remove_photo,
             create::check_name,
             create::create_repo,
             create::ensure_pages,

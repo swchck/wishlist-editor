@@ -23,6 +23,8 @@ pub enum AppError {
     AlreadyExists(String),
     #[error("карточка «{0}» не найдена")]
     NotFound(String),
+    #[error("картинка не подошла: {0}")]
+    BadImage(String),
     #[error("нет связи с GitHub")]
     Offline,
     #[error("нужно войти в GitHub")]
@@ -59,6 +61,7 @@ impl AppError {
             Self::RepoNotFound => "repo_not_found",
             Self::AlreadyExists(_) => "already_exists",
             Self::NotFound(_) => "not_found",
+            Self::BadImage(_) => "bad_image",
             Self::Offline => "offline",
             Self::NotSignedIn => "not_signed_in",
             Self::Unauthorized => "unauthorized",

@@ -13,11 +13,13 @@ use git2::Repository;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use tauri::async_runtime::spawn_blocking;
+use tauri::ipc::{InvokeBody, Request, Response};
 
 use crate::auth::{self, DeviceCode, DevicePrompt};
 use crate::error::{AppError, AppResult};
 use crate::git::{self, Change, Conflict, Integrate, Pull, Side};
 use crate::github::{self, DeployRun, GitHub, RemoteWishlist, User};
+use crate::photos;
 use crate::workspace::{RawItem, Snapshot, Workspace};
 
 /// Attempts at fetch → replay → push before giving up on a busy remote.
@@ -511,6 +513,37 @@ pub async fn create_item(slug: String, text: String, state: State<'_, AppState>)
 #[tauri::command]
 pub async fn delete_item(slug: String, state: State<'_, AppState>) -> AppResult<()> {
     state.locked(move |ws| ws.delete_item(&slug)).await
+}
+
+/// Compresses a photo sent as the raw request body and stores it for the card named
+/// by the `x-slug` header. Takes bytes, never a path: the webview cannot make the app
+/// read a file the user did not pick or drop.
+#[tauri::command]
+pub async fn add_photo(request: Request<'_>, state: State<'_, AppState>) -> AppResult<String> {
+    let InvokeBody::Raw(bytes) = request.body() else {
+        return Err(AppError::BadImage("пустой файл".into()));
+    };
+    let slug = request
+        .headers()
+        .get("x-slug")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    let bytes = bytes.clone();
+    // decoding a 40 MB photo takes a while; keep it outside the repo lock
+    let jpeg = blocking(move || photos::compress(&bytes)).await?;
+    state.locked(move |ws| ws.store_photo(&slug, &jpeg)).await
+}
+
+#[tauri::command]
+pub async fn read_photo(path: String, state: State<'_, AppState>) -> AppResult<Response> {
+    let bytes = state.locked(move |ws| ws.read_photo(&path)).await?;
+    Ok(Response::new(bytes))
+}
+
+#[tauri::command]
+pub async fn remove_photo(path: String, state: State<'_, AppState>) -> AppResult<()> {
+    state.locked(move |ws| ws.remove_photo(&path)).await
 }
 
 #[tauri::command]

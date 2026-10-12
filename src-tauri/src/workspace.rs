@@ -19,6 +19,10 @@ pub const ITEMS_DIR: &str = "src/content/items";
 /// Item format this build reads and writes; must match `SCHEMA_VERSION` in src/lib/wishlist/schema.ts.
 pub const SCHEMA_VERSION: u64 = 1;
 
+/// Where uploaded photos go, relative to the items folder.
+pub const IMAGES_DIR: &str = "images";
+const PHOTO_EXTENSIONS: [&str; 6] = ["jpg", "jpeg", "png", "webp", "gif", "avif"];
+
 const MAX_SLUG_LEN: usize = 80;
 
 /// A card file as stored on disk.
@@ -225,6 +229,58 @@ impl Workspace {
             return Err(AppError::AlreadyExists(to.to_owned()));
         }
         Ok(fs::rename(src, dst)?)
+    }
+
+    /// Returns a card photo by its path relative to the items folder, e.g. `images/a-1.jpg`.
+    /// Only picture files are reachable, so this can never hand out the config or a card.
+    fn photo_path(&self, rel: &str) -> AppResult<PathBuf> {
+        let bad = || AppError::NotFound(rel.to_owned());
+        let parts_ok = rel
+            .split('/')
+            .all(|p| !p.is_empty() && p != "." && p != ".." && !p.contains('\\'));
+        let ext_ok = Path::new(rel)
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| PHOTO_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()));
+        if !parts_ok || !ext_ok {
+            return Err(bad());
+        }
+        let path = self.safe_path(&format!("{ITEMS_DIR}/{rel}"))?;
+        if !fs::symlink_metadata(&path).is_ok_and(|m| m.is_file()) {
+            return Err(bad());
+        }
+        Ok(path)
+    }
+
+    /// Stores an already compressed photo as `images/<slug>-N.jpg` under the first free N
+    /// and returns how a card references it: `./images/<slug>-N.jpg`.
+    pub fn store_photo(&self, slug: &str, jpeg: &[u8]) -> AppResult<String> {
+        self.ensure_writable()?;
+        if !is_valid_slug(slug) {
+            return Err(AppError::InvalidSlug(slug.to_owned()));
+        }
+        let dir = self.safe_path(&format!("{ITEMS_DIR}/{IMAGES_DIR}"))?;
+        fs::create_dir_all(&dir)?;
+        let name = (1..)
+            .map(|n| format!("{slug}-{n}.{}", crate::photos::EXTENSION))
+            .find(|name| fs::symlink_metadata(dir.join(name)).is_err())
+            .expect("some index is free");
+        self.write_atomic(&format!("photo-{slug}"), &dir.join(&name), jpeg)?;
+        Ok(format!("./{IMAGES_DIR}/{name}"))
+    }
+
+    /// Reads a photo for the editor's preview.
+    pub fn read_photo(&self, rel: &str) -> AppResult<Vec<u8>> {
+        let path = self.photo_path(rel)?;
+        if fs::metadata(&path)?.len() > crate::photos::MAX_INPUT_BYTES as u64 {
+            return Err(AppError::BadImage("файл больше 40 МБ".into()));
+        }
+        Ok(fs::read(path)?)
+    }
+
+    pub fn remove_photo(&self, rel: &str) -> AppResult<()> {
+        self.ensure_writable()?;
+        Ok(fs::remove_file(self.photo_path(rel)?)?)
     }
 
     /// Where half-written files live: inside `.git`, so git never sees or commits them
@@ -440,6 +496,59 @@ mod tests {
             Err(AppError::UnsafeRepo(_))
         ));
         assert_eq!(fs::read_dir(elsewhere.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn photos_get_numbered_and_stay_in_the_items_folder() {
+        let (dir, ws) = wishlist();
+        assert_eq!(ws.store_photo("gift", b"1").unwrap(), "./images/gift-1.jpg");
+        assert_eq!(ws.store_photo("gift", b"2").unwrap(), "./images/gift-2.jpg");
+        ws.remove_photo("images/gift-1.jpg").unwrap();
+        assert_eq!(ws.store_photo("gift", b"3").unwrap(), "./images/gift-1.jpg");
+        assert_eq!(ws.read_photo("images/gift-2.jpg").unwrap(), b"2");
+        assert_eq!(
+            ws.list_files().unwrap(),
+            ["images/gift-1.jpg", "images/gift-2.jpg"]
+        );
+
+        fs::write(dir.path().join("secret.png"), "x").unwrap();
+        ws.write_item("card", "text").unwrap();
+        for rel in [
+            "../../secret.png",
+            "images/../../../secret.png",
+            "/etc/passwd.png",
+            "card.md",
+            "../../wishlist.config.json",
+            "images/missing.jpg",
+            "images",
+        ] {
+            assert!(ws.read_photo(rel).is_err(), "{rel}");
+            assert!(ws.remove_photo(rel).is_err(), "{rel}");
+        }
+        assert!(matches!(
+            ws.store_photo("../x", b"x"),
+            Err(AppError::InvalidSlug(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn photos_never_follow_links() {
+        use std::os::unix::fs::symlink;
+        let (dir, ws) = wishlist();
+        let victim = dir.path().join("victim.jpg");
+        fs::write(&victim, "precious").unwrap();
+        let images = dir.path().join(ITEMS_DIR).join(IMAGES_DIR);
+        fs::create_dir_all(&images).unwrap();
+        symlink(&victim, images.join("pic.jpg")).unwrap();
+        assert!(ws.read_photo("images/pic.jpg").is_err());
+        assert!(ws.remove_photo("images/pic.jpg").is_err());
+        symlink(&victim, images.join("gift-1.jpg")).unwrap();
+        assert_eq!(
+            ws.store_photo("gift", b"new").unwrap(),
+            "./images/gift-2.jpg"
+        );
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "precious");
     }
 
     #[test]

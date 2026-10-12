@@ -13,6 +13,8 @@ import {
 import {
   checkLocalPhotos,
   ConfigSchema,
+  photosOf,
+  resolveItemPath,
   SCHEMA_VERSION,
   validateItem,
   type FieldErrors,
@@ -24,6 +26,16 @@ import { slugify, uniqueSlug } from "@/lib/wishlist/slug";
 import { slugOfPath } from "@/lib/wishlist/changes";
 
 const SAVE_DELAY_MS = 600;
+
+const isRemote = (ref: string) => /^https?:\/\//.test(ref);
+const MIME: Record<string, string> = {
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+  gif: "image/gif",
+  avif: "image/avif",
+};
 
 export interface Card {
   slug: string;
@@ -66,6 +78,9 @@ export const useWishlist = defineStore("wishlist", () => {
   /** Commits that are local only, e.g. from a publish that could not push. */
   const ahead = ref(0);
   let files: ReadonlySet<string> = new Set();
+  /** Object URLs of local photos by path relative to the items folder; read lazily from disk. */
+  const photoUrls = shallowReactive(new Map<string, string>());
+  const photoRequested = new Set<string>();
 
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   let statusTimer: ReturnType<typeof setTimeout> | undefined;
@@ -114,6 +129,7 @@ export const useWishlist = defineStore("wishlist", () => {
     config.value = ConfigSchema.parse(JSON.parse(snap.configText));
     writable.value = snap.writable;
     files = new Set(snap.files);
+    dropPhotoUrls();
     cards.clear();
     for (const raw of snap.items) cards.set(raw.slug, loadCard(raw.slug, raw.text, files));
     if (!selected.value || !cards.has(selected.value)) selected.value = list.value[0]?.slug ?? null;
@@ -136,6 +152,7 @@ export const useWishlist = defineStore("wishlist", () => {
     await flushAll();
     clearTimeout(statusTimer);
     if (repo.value) await api.closeRepo();
+    dropPhotoUrls();
     repo.value = null;
     siteUrl.value = null;
     config.value = null;
@@ -249,9 +266,117 @@ export const useWishlist = defineStore("wishlist", () => {
     await api.deleteItem(slug);
     const order = list.value.map((c) => c.slug);
     const i = order.indexOf(slug);
+    const orphans = photosOf(cards.get(slug)?.data ?? {});
     cards.delete(slug);
     if (selected.value === slug) selected.value = order[i + 1] ?? order[i - 1] ?? null;
+    await deleteUnusedPhotos(orphans);
     scheduleStatus();
+  }
+
+  /**
+   * Returns what an `<img>` can show for a card photo reference: remote URLs as they are,
+   * local files as object URLs once read from disk, `undefined` while loading or missing.
+   */
+  function photoSrc(ref: string | undefined): string | undefined {
+    if (!ref || isRemote(ref)) return ref;
+    const rel = resolveItemPath(ref);
+    if (rel === null || !files.has(rel)) return undefined;
+    if (!photoRequested.has(rel)) {
+      photoRequested.add(rel);
+      void loadPhoto(rel);
+    }
+    return photoUrls.get(rel);
+  }
+
+  async function loadPhoto(rel: string) {
+    const gen = generation.value;
+    try {
+      const bytes = await api.readPhoto(rel);
+      if (gen !== generation.value || !photoRequested.has(rel)) return;
+      const type = MIME[rel.split(".").pop()!.toLowerCase()];
+      photoUrls.set(rel, URL.createObjectURL(new Blob([bytes], { type })));
+    } catch {
+      // the thumbnail falls back to initials and the inspector already lists the missing file
+    }
+  }
+
+  function dropPhotoUrls() {
+    for (const url of photoUrls.values()) URL.revokeObjectURL(url);
+    photoUrls.clear();
+    photoRequested.clear();
+  }
+
+  // one photo goes to `image`, several to `images` — the two shapes the site's README documents
+  function setPhotos(slug: string, next: string[]) {
+    if (next.length <= 1) {
+      updateField(slug, "images", undefined);
+      updateField(slug, "image", next[0]);
+    } else {
+      updateField(slug, "image", undefined);
+      updateField(slug, "images", next);
+    }
+  }
+
+  /**
+   * Uploads pictures into the repo and appends them to the card's photos.
+   * Returns one error message per picture that could not be added.
+   */
+  async function addPhotos(slug: string, pictures: Blob[]): Promise<string[]> {
+    const added: string[] = [];
+    const failed: string[] = [];
+    for (const pic of pictures) {
+      try {
+        const ref = await api.addPhoto(slug, new Uint8Array(await pic.arrayBuffer()));
+        files = new Set(files).add(resolveItemPath(ref)!);
+        added.push(ref);
+      } catch (e) {
+        failed.push(errorMessage(e));
+      }
+    }
+    const card = cards.get(slug);
+    if (card?.file && !frozen.value) setPhotos(slug, [...photosOf(card.data), ...added]);
+    // renamed or deleted mid-upload: nobody references these files, so don't leave them behind
+    else await deleteUnusedPhotos(added);
+    scheduleStatus();
+    return failed;
+  }
+
+  /** Removes the card's photo number `index`, and its file once no card shows it. */
+  async function removePhoto(slug: string, index: number) {
+    const card = cards.get(slug);
+    if (!card?.file || frozen.value) return;
+    const all = photosOf(card.data);
+    const ref = all[index];
+    setPhotos(
+      slug,
+      all.filter((_, i) => i !== index),
+    );
+    // the card must stop pointing at the file on disk before the file goes, or a crash
+    // in between leaves a card that fails the site build
+    await save(slug);
+    if (ref) await deleteUnusedPhotos([ref]);
+    scheduleStatus();
+  }
+
+  // only uploads live in images/; a photo kept elsewhere was put there by hand, leave it be
+  async function deleteUnusedPhotos(refs: string[]) {
+    const used = new Set(list.value.flatMap((c) => photosOf(c.data).map(resolveItemPath)));
+    for (const ref of refs) {
+      const rel = isRemote(ref) ? null : resolveItemPath(ref);
+      if (!rel?.startsWith("images/") || used.has(rel) || !files.has(rel)) continue;
+      try {
+        await api.removePhoto(rel);
+        const next = new Set(files);
+        next.delete(rel);
+        files = next;
+        const url = photoUrls.get(rel);
+        if (url) URL.revokeObjectURL(url);
+        photoUrls.delete(rel);
+        photoRequested.delete(rel);
+      } catch {
+        // a leftover file costs a few kilobytes in the repo; not worth failing the delete over
+      }
+    }
   }
 
   async function rename(from: string, to: string) {
@@ -295,5 +420,9 @@ export const useWishlist = defineStore("wishlist", () => {
     create,
     remove,
     rename,
+    photoSrc,
+    addPhotos,
+    removePhoto,
+    setPhotos,
   };
 });

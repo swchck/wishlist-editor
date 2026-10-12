@@ -28,6 +28,7 @@ keyring = { version = "3", features = ["apple-native", "windows-native"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "native-tls", "http2", "system-proxy", "form", "query"] }
 tokio = { version = "1.53.2", features = ["time", "sync"] }
 base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

@@ -20,6 +20,7 @@ const CONFIG = JSON.stringify({ schemaVersion: 1, title: "Мой вишлист"
 const USER = { login: "swchck", id: 1, name: "Тестовый пользователь", avatarUrl: "" };
 const REPO = { owner: "swchck", name: "wishlist" };
 const SITE = "https://swchck.github.io/wishlist/";
+const photos = new Map<string, Uint8Array>();
 let signedIn = false;
 let deployTicks = 0;
 let pagesTries = 0;
@@ -31,7 +32,7 @@ const snapshot = () => ({
   root: "/mock/repos/swchck/wishlist",
   configText: CONFIG,
   items: items(),
-  files: ["images/tricky-2.webp"],
+  files: ["images/tricky-2.webp", ...photos.keys()],
   writable: true,
 });
 
@@ -181,6 +182,17 @@ mockIPC(
       case "rename_item":
         files.set(String(a.to), files.get(String(a.from))!);
         files.delete(String(a.from));
+        return;
+      case "add_photo": {
+        await wait(300);
+        const rel = `images/mock-${photos.size + 1}.jpg`;
+        photos.set(rel, payload as unknown as Uint8Array);
+        return `./${rel}`;
+      }
+      case "read_photo":
+        return photos.get(String(a.path))?.buffer ?? Promise.reject({ kind: "not_found", message: "нет файла" });
+      case "remove_photo":
+        photos.delete(String(a.path));
         return;
     }
     console.warn("unmocked IPC", cmd, payload);

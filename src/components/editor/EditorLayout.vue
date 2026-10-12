@@ -12,6 +12,7 @@ import {
   PlusIcon,
   PanelRightIcon,
   UploadIcon,
+  ImagePlusIcon,
 } from "@lucide/vue";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import {
@@ -35,6 +36,7 @@ import DeployBadge from "./DeployBadge.vue";
 import { useWishlist } from "@/stores/wishlist";
 import { usePublish } from "@/stores/publish";
 import { SCHEMA_VERSION } from "@/lib/wishlist/schema";
+import { picturesOf, uploadPhotos } from "./upload";
 
 const store = useWishlist();
 const publish = usePublish();
@@ -79,6 +81,38 @@ function toggle(panel: PanelApi | null) {
   else panel.collapse();
 }
 
+// photos dropped anywhere in the editor go to the open card; dragenter/leave fire for every
+// child element, so count them instead of trusting the last event
+const dragDepth = ref(0);
+const canDrop = computed(() => !!store.current?.file && !store.frozen);
+const isFileDrag = (e: DragEvent) => !!e.dataTransfer?.types.includes("Files");
+function onDragEnter(e: DragEvent) {
+  if (isFileDrag(e)) dragDepth.value++;
+}
+function onDragLeave(e: DragEvent) {
+  if (isFileDrag(e)) dragDepth.value = Math.max(0, dragDepth.value - 1);
+}
+function onDrop(e: DragEvent) {
+  dragDepth.value = 0;
+  if (!canDrop.value || !store.current) return;
+  const pictures = picturesOf(e.dataTransfer?.files);
+  if (!pictures.length) {
+    toast.error("Это не картинка", { description: "Подойдут JPEG, PNG, WebP или GIF" });
+    return;
+  }
+  void uploadPhotos(store.current.slug, pictures);
+}
+
+// inside text fields a paste is text; the photo URL field handles its own picture pastes
+function onPaste(e: ClipboardEvent) {
+  const t = e.target as HTMLElement | null;
+  if (t?.closest("input, textarea, [contenteditable='true']") || !canDrop.value || !store.current) return;
+  const pictures = picturesOf(e.clipboardData?.items);
+  if (!pictures.length) return;
+  e.preventDefault();
+  void uploadPhotos(store.current.slug, pictures);
+}
+
 // ⌘\ — card list, ⌥⌘\ — preview; ⌘B would have been the usual choice, but it is bold in the body editor
 function onKey(e: KeyboardEvent) {
   if (!(e.metaKey || e.ctrlKey) || e.code !== "Backslash") return;
@@ -87,15 +121,41 @@ function onKey(e: KeyboardEvent) {
 }
 onMounted(() => {
   window.addEventListener("keydown", onKey);
+  window.addEventListener("paste", onPaste);
   // sizes, collapsed ones included, come back from the saved layout
   leftCollapsed.value = !!unref(left.value?.isCollapsed);
   rightCollapsed.value = !!unref(right.value?.isCollapsed);
 });
-onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onKey);
+  window.removeEventListener("paste", onPaste);
+});
 </script>
 
 <template>
-  <div class="flex h-full flex-col">
+  <div
+    class="relative flex h-full flex-col"
+    @dragenter="onDragEnter"
+    @dragleave="onDragLeave"
+    @dragover.prevent
+    @drop.prevent="onDrop"
+  >
+    <div
+      v-if="dragDepth > 0"
+      class="bg-background/80 pointer-events-none absolute inset-0 z-50 grid place-items-center p-6 backdrop-blur-sm"
+    >
+      <div
+        class="grid w-full max-w-md place-items-center gap-2 rounded-2xl border-2 border-dashed p-10 text-center"
+        :class="canDrop ? 'border-primary' : 'border-muted-foreground/40'"
+      >
+        <ImagePlusIcon class="text-muted-foreground size-8" />
+        <template v-if="canDrop">
+          <div class="font-medium">Добавить фото в «{{ store.current?.data.title || store.current?.slug }}»</div>
+          <div class="text-muted-foreground text-xs">Уменьшим до 1600 px и уберём геометку из файла</div>
+        </template>
+        <div v-else class="text-muted-foreground text-sm">Сначала откройте карточку</div>
+      </div>
+    </div>
     <header
       data-tauri-drag-region
       class="bg-muted/40 flex h-11 shrink-0 items-center gap-3 border-b pr-3 pl-3 text-sm mac:pl-20"

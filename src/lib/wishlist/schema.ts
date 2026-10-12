@@ -124,8 +124,11 @@ export function checkLocalPhotos(data: Pick<ItemData, "image" | "images">, files
   return errors;
 }
 
-/** Returns every photo of a card in display order, whichever of `image`/`images` holds them. */
-export function photosOf(data: Pick<ItemData, "image" | "images">): string[] {
-  const fromImage = data.image === undefined ? [] : Array.isArray(data.image) ? data.image : [data.image];
-  return [...fromImage, ...(data.images ?? [])];
+/**
+ * Returns every photo of a card in display order, whichever of `image`/`images` holds them.
+ * Takes unvalidated card data: entries that are not strings are skipped.
+ */
+export function photosOf(data: { image?: unknown; images?: unknown }): string[] {
+  const list = (v: unknown) => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
+  return [...list(data.image), ...list(data.images)].filter((p): p is string => typeof p === "string");
 }

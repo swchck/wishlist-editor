@@ -99,7 +99,7 @@ function subtitle(data: Record<string, unknown>) {
           :class="c.slug === store.selected ? 'bg-muted' : 'hover:bg-muted/50'"
           @click="store.selected = c.slug"
         >
-          <CardThumb :src="photosOf(c.data as never)[0]" :title="String(c.data.title ?? c.slug)" class="size-8" />
+          <CardThumb :src="photosOf(c.data)[0]" :title="String(c.data.title ?? c.slug)" class="size-8" />
           <span class="min-w-0">
             <span class="block truncate font-medium" :class="{ 'text-muted-foreground': c.data.hidden }">
               {{ c.data.title ?? c.slug }}

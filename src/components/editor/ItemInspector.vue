@@ -1,6 +1,15 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { ChevronLeftIcon, ChevronRightIcon, CircleAlertIcon, CircleCheckIcon, PlusIcon, XIcon } from "@lucide/vue";
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  CircleAlertIcon,
+  CircleCheckIcon,
+  ImagePlusIcon,
+  Loader2Icon,
+  PlusIcon,
+  XIcon,
+} from "@lucide/vue";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -8,6 +17,7 @@ import CardThumb from "./CardThumb.vue";
 import { GIFT_TYPE_LABELS, photosOf, type GiftType } from "@/lib/wishlist/schema";
 import { formatPrice } from "@/lib/wishlist/format";
 import { useWishlist, type Card } from "@/stores/wishlist";
+import { picturesOf, uploading, uploadPhotos } from "./upload";
 
 interface Link {
   label: string;
@@ -19,7 +29,7 @@ const store = useWishlist();
 const d = computed(() => props.card.data);
 const ro = computed(() => store.frozen || !props.card.file);
 
-const photos = computed(() => photosOf(d.value as never));
+const photos = computed(() => photosOf(d.value));
 // which photo the preview shows; the site's card cycles through them the same way
 const shownPhoto = ref(0);
 watch(
@@ -50,15 +60,34 @@ function editLink(i: number, patch: Partial<Link>) {
   setLinks(links.value.map((l, j) => (j === i ? { ...l, ...patch } : l)));
 }
 
-// one photo goes to `image`, several to `images` — the two shapes the site's README documents
 function setPhotos(next: string[]) {
-  if (next.length <= 1) {
-    set("images", undefined);
-    set("image", next[0]);
-  } else {
-    set("image", undefined);
-    set("images", next);
-  }
+  store.setPhotos(props.card.slug, next);
+}
+
+const picker = ref<HTMLInputElement>();
+async function addPictures(pictures: File[]) {
+  const before = photos.value.length;
+  await uploadPhotos(props.card.slug, pictures);
+  if (photos.value.length > before) shownPhoto.value = before;
+}
+function onPicked(e: Event) {
+  const input = e.target as HTMLInputElement;
+  void addPictures(picturesOf(input.files));
+  input.value = "";
+}
+// a screenshot copied to the clipboard pastes straight in; plain text pastes as usual
+function onPaste(e: ClipboardEvent) {
+  const pictures = picturesOf(e.clipboardData?.items);
+  if (!pictures.length) return;
+  e.preventDefault();
+  void addPictures(pictures);
+}
+function addUrl(el: HTMLInputElement) {
+  const url = el.value.trim();
+  el.value = "";
+  if (!url) return;
+  setPhotos([...photos.value, url]);
+  shownPhoto.value = photos.value.length - 1;
 }
 
 const FIELD_NAMES: Record<string, string> = {
@@ -146,38 +175,67 @@ function fieldName(path: string) {
 
       <section v-if="!card.parseError" class="grid gap-2">
         <h4 class="text-muted-foreground text-[11px] font-semibold tracking-wider uppercase">Фото</h4>
-        <div v-for="(p, i) in photos" :key="i" class="flex gap-1.5">
-          <Input
-            :id="`photo-${i}`"
-            :model-value="p"
-            class="h-8 font-mono text-xs"
-            :readonly="ro"
-            @change="setPhotos(photos.map((x, j) => (j === i ? ($event.target as HTMLInputElement).value.trim() : x)))"
-          />
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            :disabled="ro"
-            aria-label="Убрать фото"
-            @click="setPhotos(photos.filter((_, j) => j !== i))"
+        <div class="grid grid-cols-[repeat(auto-fill,minmax(4rem,1fr))] gap-2">
+          <div v-for="(p, i) in photos" :key="`${i}:${p}`" class="group/tile relative">
+            <button
+              type="button"
+              class="block aspect-square w-full rounded-md ring-offset-2 outline-none focus-visible:ring-2"
+              :class="i === shownPhoto ? 'ring-primary ring-2' : ''"
+              :title="p"
+              :aria-label="`Показать фото ${i + 1}`"
+              @click="shownPhoto = i"
+            >
+              <CardThumb :src="p" :title="String(i + 1)" class="size-full" />
+            </button>
+            <button
+              v-if="!ro"
+              type="button"
+              class="bg-background/90 absolute -top-1.5 -right-1.5 grid size-5 place-items-center rounded-full border opacity-0 shadow-sm transition-opacity group-hover/tile:opacity-100 focus-visible:opacity-100"
+              aria-label="Убрать фото"
+              @click="store.removePhoto(card.slug, i)"
+            >
+              <XIcon class="size-3" />
+            </button>
+          </div>
+          <div
+            v-for="n in uploading"
+            :key="`up${n}`"
+            class="bg-muted grid aspect-square place-items-center rounded-md border"
           >
-            <XIcon />
-          </Button>
+            <Loader2Icon class="text-muted-foreground size-4 animate-spin" />
+          </div>
+          <button
+            v-if="!ro"
+            type="button"
+            class="text-muted-foreground hover:text-foreground hover:border-foreground/40 grid aspect-square place-items-center rounded-md border border-dashed transition-colors"
+            aria-label="Добавить фото с компьютера"
+            title="Добавить фото с компьютера"
+            @click="picker?.click()"
+          >
+            <ImagePlusIcon class="size-5" />
+          </button>
         </div>
+        <input ref="picker" type="file" accept="image/*" multiple hidden @change="onPicked" />
+        <p v-if="!ro" class="text-muted-foreground text-[11px] leading-snug">
+          Перетащите фото в окно, вставьте из буфера (⌘V) или добавьте ссылку:
+        </p>
         <Input
           id="photo-new"
           class="h-8 font-mono text-xs"
           placeholder="https://… и Enter"
           :readonly="ro"
-          @keydown.enter.prevent="
-            (e: KeyboardEvent) => {
-              const el = e.target as HTMLInputElement;
-              if (el.value.trim()) {
-                setPhotos([...photos, el.value.trim()]);
-                shownPhoto = photos.length - 1;
-              }
-              el.value = '';
-            }
+          @paste="onPaste"
+          @keydown.enter.prevent="addUrl($event.target as HTMLInputElement)"
+        />
+        <Input
+          v-if="photos[shownPhoto] && /^https?:/.test(photos[shownPhoto])"
+          :id="`photo-${shownPhoto}`"
+          :model-value="photos[shownPhoto]"
+          class="h-8 font-mono text-xs"
+          :readonly="ro"
+          aria-label="Ссылка на выбранное фото"
+          @change="
+            setPhotos(photos.map((x, j) => (j === shownPhoto ? ($event.target as HTMLInputElement).value.trim() : x)))
           "
         />
       </section>
