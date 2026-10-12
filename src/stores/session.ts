@@ -11,6 +11,8 @@ export const useSession = defineStore("session", () => {
   const offline = ref(false);
   const prompt = ref<DevicePrompt | null>(null);
   const error = ref<string | null>(null);
+  // a cancelled poll only notices on its next tick; by then a newer flow may be running
+  let flow = 0;
 
   async function check() {
     phase.value = "checking";
@@ -29,22 +31,29 @@ export const useSession = defineStore("session", () => {
   /** Runs the device flow; `onPrompt` fires as soon as the code is known, before approval. */
   async function signIn(onPrompt?: (p: DevicePrompt) => void) {
     error.value = null;
+    const mine = ++flow;
     try {
-      prompt.value = await api.authStart();
-      onPrompt?.(prompt.value);
+      const p = await api.authStart();
+      if (mine !== flow) return;
+      prompt.value = p;
+      onPrompt?.(p);
       phase.value = "awaiting-code";
-      user.value = await api.authWait();
+      const u = await api.authWait();
+      if (mine !== flow) return;
+      user.value = u;
       offline.value = false;
       phase.value = "signed-in";
+      prompt.value = null;
     } catch (e) {
+      if (mine !== flow) return;
       if (!isAppError(e, "auth_cancelled")) error.value = errorMessage(e);
-      if (phase.value === "awaiting-code") phase.value = "signed-out";
-    } finally {
+      phase.value = "signed-out";
       prompt.value = null;
     }
   }
 
   async function cancel() {
+    flow++;
     await api.authCancel();
     prompt.value = null;
     phase.value = "signed-out";

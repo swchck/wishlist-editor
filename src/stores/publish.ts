@@ -57,6 +57,8 @@ export const usePublish = defineStore("publish", () => {
       await wishlist.flushAll();
       const res = await api.publish(message || suggestedMessage.value, choices);
       if (res.outcome === "conflicts") {
+        // the edits are committed now; the list must stop offering them for revert
+        await wishlist.refreshStatus().catch(() => {});
         conflicts.value = res.files;
         phase.value = "conflicts";
         return;

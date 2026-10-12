@@ -80,7 +80,8 @@ const count = computed(() => store.changes.length || (store.ahead ? 1 : 0));
     </Alert>
     <div class="grid min-h-0 flex-1 grid-cols-[272px_minmax(0,1fr)_300px]">
       <ItemList />
-      <ItemEditor v-if="store.current" :key="store.current.slug" :card="store.current" />
+      <!-- Crepe reads its text only on mount, so a reload from disk must remount it -->
+      <ItemEditor v-if="store.current" :key="`${store.current.slug}:${store.generation}`" :card="store.current" />
       <div v-else class="text-muted-foreground grid place-items-center text-sm">
         Карточек пока нет — создайте первую
       </div>

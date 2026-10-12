@@ -97,7 +97,11 @@ export const useWishlist = defineStore("wishlist", () => {
   });
   const pending = computed(() => changes.value.length + ahead.value > 0);
 
+  /** Bumped whenever cards are re-read from disk; editors key on it to drop stale text. */
+  const generation = ref(0);
+
   function applySnapshot(snap: Snapshot) {
+    generation.value++;
     config.value = ConfigSchema.parse(JSON.parse(snap.configText));
     writable.value = snap.writable;
     files = new Set(snap.files);
@@ -262,6 +266,7 @@ export const useWishlist = defineStore("wishlist", () => {
     current,
     categories,
     readOnly,
+    generation,
     locked,
     frozen,
     saveState,
