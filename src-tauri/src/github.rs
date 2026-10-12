@@ -340,7 +340,10 @@ mod live {
     fn client() -> Option<GitHub> {
         let token = std::env::var("GITHUB_TOKEN").ok()?;
         Some(GitHub::new(
-            Client::builder().user_agent("wishlist-editor-test").build().unwrap(),
+            Client::builder()
+                .user_agent("wishlist-editor-test")
+                .build()
+                .unwrap(),
             token,
         ))
     }

@@ -12,10 +12,82 @@ export interface Snapshot {
   files: string[];
 }
 
+export interface User {
+  login: string;
+  id: number;
+  name: string | null;
+  avatarUrl: string;
+}
+
+export interface AuthStatus {
+  user: User | null;
+  offline: boolean;
+}
+
+export interface DevicePrompt {
+  userCode: string;
+  verificationUri: string;
+  expiresIn: number;
+}
+
+export interface RepoId {
+  owner: string;
+  name: string;
+}
+
+export interface RemoteWishlist extends RepoId {
+  title: string | null;
+  items: number;
+  siteUrl: string;
+  updatedAt: string;
+}
+
+export interface Change {
+  path: string;
+  kind: "added" | "modified" | "deleted";
+}
+
+export interface RepoState {
+  changes: Change[];
+  ahead: number;
+  behind: number;
+}
+
+export type Pull = "up_to_date" | "fast_forwarded" | "blocked" | "diverged";
+
+export interface Opened {
+  repo: RepoId;
+  snapshot: Snapshot;
+  state: RepoState;
+  pull: Pull | null;
+  siteUrl: string;
+}
+
+export interface Conflict {
+  path: string;
+  local: string | null;
+  remote: string | null;
+}
+
+export type Side = "local" | "remote";
+
+export type Published =
+  { outcome: "pushed"; sha: string } | { outcome: "conflicts"; files: Conflict[] } | { outcome: "nothingToPublish" };
+
+export interface DeployRun {
+  status: string;
+  conclusion: string | null;
+  htmlUrl: string;
+}
+
 /** Error shape produced by the Rust `AppError` serializer. */
 export interface AppError {
   kind: string;
   message: string;
+}
+
+export function isAppError(e: unknown, kind?: string): e is AppError {
+  return !!e && typeof e === "object" && "kind" in e && (kind === undefined || (e as AppError).kind === kind);
 }
 
 export function errorMessage(e: unknown): string {
@@ -24,7 +96,22 @@ export function errorMessage(e: unknown): string {
 }
 
 export const api = {
-  openWorkspace: (path: string) => invoke<Snapshot>("open_workspace", { path }),
+  authStatus: () => invoke<AuthStatus>("auth_status"),
+  authStart: () => invoke<DevicePrompt>("auth_start"),
+  authWait: () => invoke<User>("auth_wait"),
+  authCancel: () => invoke<void>("auth_cancel"),
+  signOut: () => invoke<void>("sign_out"),
+
+  listWishlists: () => invoke<RemoteWishlist[]>("list_wishlists"),
+  localWishlists: () => invoke<RepoId[]>("local_wishlists"),
+  openRepo: (owner: string, name: string) => invoke<Opened>("open_repo", { owner, name }),
+  closeRepo: () => invoke<void>("close_repo"),
+  reload: () => invoke<Snapshot>("reload"),
+  repoStatus: () => invoke<RepoState>("repo_status"),
+  discardChange: (path: string) => invoke<void>("discard_change", { path }),
+  publish: (message: string, choices: Record<string, Side> = {}) => invoke<Published>("publish", { message, choices }),
+  deployStatus: (sha: string) => invoke<DeployRun | null>("deploy_status", { sha }),
+
   listItems: () => invoke<RawItem[]>("list_items"),
   writeItem: (slug: string, text: string) => invoke<void>("write_item", { slug, text }),
   createItem: (slug: string, text: string) => invoke<void>("create_item", { slug, text }),

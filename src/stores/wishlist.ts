@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { computed, markRaw, ref, shallowReactive } from "vue";
-import { api, errorMessage } from "@/lib/api";
+import { api, errorMessage, type Change, type Pull, type RepoId, type Snapshot } from "@/lib/api";
 import {
   itemData,
   mergeBody,
@@ -21,9 +21,9 @@ import {
   type WishlistConfig,
 } from "@/lib/wishlist/schema";
 import { slugify, uniqueSlug } from "@/lib/wishlist/slug";
+import { slugOfPath } from "@/lib/wishlist/changes";
 
 const SAVE_DELAY_MS = 600;
-const RECENT_KEY = "recent-workspaces";
 
 export interface Card {
   slug: string;
@@ -52,25 +52,23 @@ function loadCard(slug: string, text: string, files: ReadonlySet<string>): Card 
   }
 }
 
-function readRecent(): string[] {
-  try {
-    return JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
-  } catch {
-    return [];
-  }
-}
-
 export const useWishlist = defineStore("wishlist", () => {
-  const root = ref<string | null>(null);
+  const repo = ref<RepoId | null>(null);
+  const siteUrl = ref<string | null>(null);
+  /** How opening went: `null` means GitHub was unreachable and the local copy opened as is. */
+  const pull = ref<Pull | null>(null);
   const config = ref<WishlistConfig | null>(null);
   const cards = shallowReactive(new Map<string, Card>());
   const selected = ref<string | null>(null);
   const saveState = ref<SaveState>("idle");
   const saveError = ref<string | null>(null);
-  const recent = ref<string[]>(readRecent());
+  const changes = ref<Change[]>([]);
+  /** Commits that are local only, e.g. from a publish that could not push. */
+  const ahead = ref(0);
   let files: ReadonlySet<string> = new Set();
 
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  let statusTimer: ReturnType<typeof setTimeout> | undefined;
 
   const readOnly = computed(() => config.value?.schemaVersion !== SCHEMA_VERSION);
   // same order as the site: most wanted first
@@ -85,36 +83,75 @@ export const useWishlist = defineStore("wishlist", () => {
   const categories = computed(() =>
     [...new Set(list.value.map((c) => c.data.category).filter((c): c is string => typeof c === "string"))].sort(),
   );
-
-  function rememberRecent(path: string) {
-    recent.value = [path, ...recent.value.filter((p) => p !== path)].slice(0, 5);
-    try {
-      localStorage.setItem(RECENT_KEY, JSON.stringify(recent.value));
-    } catch {
-      // private storage can be unavailable; the list is only a convenience
+  const changeBySlug = computed(() => {
+    const m = new Map<string, Change["kind"]>();
+    for (const c of changes.value) {
+      const slug = slugOfPath(c.path);
+      if (slug) m.set(slug, c.kind);
     }
+    return m;
+  });
+  const pending = computed(() => changes.value.length + ahead.value > 0);
+
+  function applySnapshot(snap: Snapshot) {
+    config.value = ConfigSchema.parse(JSON.parse(snap.configText));
+    files = new Set(snap.files);
+    cards.clear();
+    for (const raw of snap.items) cards.set(raw.slug, loadCard(raw.slug, raw.text, files));
+    if (!selected.value || !cards.has(selected.value)) selected.value = list.value[0]?.slug ?? null;
   }
 
-  async function open(path: string) {
-    await flushAll();
-    const snap = await api.openWorkspace(path);
-    const cfg = ConfigSchema.parse(JSON.parse(snap.configText));
-    cards.clear();
-    files = new Set(snap.files);
-    for (const raw of snap.items) cards.set(raw.slug, loadCard(raw.slug, raw.text, files));
-    root.value = snap.root;
-    config.value = cfg;
+  async function open(id: RepoId) {
+    await close();
+    const opened = await api.openRepo(id.owner, id.name);
+    applySnapshot(opened.snapshot);
     selected.value = list.value[0]?.slug ?? null;
+    repo.value = opened.repo;
+    siteUrl.value = opened.siteUrl;
+    pull.value = opened.pull;
+    changes.value = opened.state.changes;
+    ahead.value = opened.state.ahead;
     saveState.value = "idle";
-    rememberRecent(snap.root);
   }
 
   async function close() {
     await flushAll();
-    root.value = null;
+    clearTimeout(statusTimer);
+    if (repo.value) await api.closeRepo();
+    repo.value = null;
+    siteUrl.value = null;
     config.value = null;
     cards.clear();
     selected.value = null;
+    changes.value = [];
+    ahead.value = 0;
+  }
+
+  /** Re-reads cards from disk after git moved files underneath (publish, discard). */
+  async function reload() {
+    await flushAll();
+    applySnapshot(await api.reload());
+    await refreshStatus();
+  }
+
+  async function refreshStatus() {
+    clearTimeout(statusTimer);
+    if (!repo.value) return;
+    const st = await api.repoStatus();
+    changes.value = st.changes;
+    ahead.value = st.ahead;
+  }
+
+  // git status walks the whole tree; after a burst of saves one call is enough
+  function scheduleStatus() {
+    clearTimeout(statusTimer);
+    statusTimer = setTimeout(() => void refreshStatus().catch(() => {}), 300);
+  }
+
+  async function discard(path: string) {
+    await flushAll();
+    await api.discardChange(path);
+    await reload();
   }
 
   function touch(card: Card) {
@@ -150,6 +187,7 @@ export const useWishlist = defineStore("wishlist", () => {
   }
 
   async function save(slug: string) {
+    clearTimeout(timers.get(slug));
     timers.delete(slug);
     const card = cards.get(slug);
     if (!card?.file) return;
@@ -165,6 +203,7 @@ export const useWishlist = defineStore("wishlist", () => {
       if (latest) cards.set(slug, { ...latest, savedText: text });
       saveError.value = null;
       saveState.value = timers.size ? "pending" : "idle";
+      scheduleStatus();
     } catch (e) {
       saveError.value = errorMessage(e);
       saveState.value = "error";
@@ -172,9 +211,8 @@ export const useWishlist = defineStore("wishlist", () => {
   }
 
   async function flushAll() {
-    const pending = [...timers.keys()];
-    for (const slug of pending) clearTimeout(timers.get(slug));
-    await Promise.all(pending.map(save));
+    const slugs = [...timers.keys()];
+    await Promise.all(slugs.map(save));
   }
 
   async function create(title: string, type: GiftType) {
@@ -183,6 +221,7 @@ export const useWishlist = defineStore("wishlist", () => {
     await api.createItem(slug, text);
     cards.set(slug, loadCard(slug, text, files));
     selected.value = slug;
+    scheduleStatus();
     return slug;
   }
 
@@ -194,6 +233,7 @@ export const useWishlist = defineStore("wishlist", () => {
     const i = order.indexOf(slug);
     cards.delete(slug);
     if (selected.value === slug) selected.value = order[i + 1] ?? order[i - 1] ?? null;
+    scheduleStatus();
   }
 
   async function rename(from: string, to: string) {
@@ -203,10 +243,13 @@ export const useWishlist = defineStore("wishlist", () => {
     cards.delete(from);
     cards.set(to, { ...card, slug: to });
     if (selected.value === from) selected.value = to;
+    scheduleStatus();
   }
 
   return {
-    root,
+    repo,
+    siteUrl,
+    pull,
     config,
     cards,
     list,
@@ -216,9 +259,15 @@ export const useWishlist = defineStore("wishlist", () => {
     readOnly,
     saveState,
     saveError,
-    recent,
+    changes,
+    ahead,
+    changeBySlug,
+    pending,
     open,
     close,
+    reload,
+    refreshStatus,
+    discard,
     updateField,
     updateBody,
     flushAll,

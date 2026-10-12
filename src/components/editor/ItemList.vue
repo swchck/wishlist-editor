@@ -32,7 +32,8 @@ const visible = computed(() => {
 });
 
 function subtitle(data: Record<string, unknown>) {
-  return [data.category, formatPrice(data.price, data.currency)].filter(Boolean).join(" · ");
+  const currency = data.currency ?? store.config?.defaultCurrency;
+  return [data.category, formatPrice(data.price, currency)].filter(Boolean).join(" · ");
 }
 </script>
 
@@ -70,6 +71,14 @@ function subtitle(data: Record<string, unknown>) {
             <span class="text-muted-foreground block truncate text-xs">{{ subtitle(c.data) || c.slug }}</span>
           </span>
           <span class="flex items-center gap-1">
+            <span
+              v-if="store.changeBySlug.get(c.slug)"
+              class="size-1.5 rounded-full"
+              :class="store.changeBySlug.get(c.slug) === 'added' ? 'bg-blue-500' : 'bg-amber-500'"
+              :title="
+                store.changeBySlug.get(c.slug) === 'added' ? 'Новая, не опубликована' : 'Изменена, не опубликована'
+              "
+            />
             <EyeOffIcon v-if="c.data.hidden" class="text-muted-foreground size-3.5" />
             <span
               v-if="c.parseError || Object.keys(c.errors).length"
