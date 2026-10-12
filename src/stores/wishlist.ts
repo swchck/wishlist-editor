@@ -84,9 +84,18 @@ export const useWishlist = defineStore("wishlist", () => {
     ),
   );
   const current = computed(() => (selected.value ? (cards.get(selected.value) ?? null) : null));
-  const categories = computed(() =>
-    [...new Set(list.value.map((c) => c.data.category).filter((c): c is string => typeof c === "string"))].sort(),
-  );
+  /** Categories in use with their card counts, most used first. */
+  const categories = computed(() => {
+    const counts = new Map<string, number>();
+    for (const c of list.value) {
+      if (typeof c.data.category === "string" && c.data.category) {
+        counts.set(c.data.category, (counts.get(c.data.category) ?? 0) + 1);
+      }
+    }
+    return [...counts]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "ru"));
+  });
   const changeBySlug = computed(() => {
     const m = new Map<string, Change["kind"]>();
     for (const c of changes.value) {

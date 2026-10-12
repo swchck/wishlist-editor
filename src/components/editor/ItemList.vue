@@ -4,7 +4,7 @@ import { EyeOffIcon, PlusIcon, SearchIcon } from "@lucide/vue";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import NewItemDialog from "./NewItemDialog.vue";
 import CardThumb from "./CardThumb.vue";
 import { useWishlist } from "@/stores/wishlist";
@@ -14,18 +14,29 @@ import { formatPrice } from "@/lib/wishlist/format";
 const store = useWishlist();
 const query = ref("");
 const typeFilter = ref<"all" | GiftType>("all");
+// reka's Select cannot hold an empty string, so "all" stands for no filter here too
+const categoryFilter = ref("all");
 const creating = ref(false);
 
 const presentTypes = computed(() => GIFT_TYPES.filter((t) => store.list.some((c) => (c.data.type ?? "вещь") === t)));
-// tabs hide below two types, so a filter on a vanished type would have no way back
+// chips hide below two types, so a filter on a vanished type would have no way back
 watch(presentTypes, (types) => {
   if (typeFilter.value !== "all" && (types.length < 2 || !types.includes(typeFilter.value))) typeFilter.value = "all";
 });
+watch(
+  () => store.categories,
+  (cats) => {
+    if (categoryFilter.value !== "all" && !cats.some((c) => c.name === categoryFilter.value))
+      categoryFilter.value = "all";
+  },
+);
+const countOfType = (t: GiftType) => store.list.filter((c) => (c.data.type ?? "вещь") === t).length;
 
 const visible = computed(() => {
   const q = query.value.trim().toLowerCase();
   return store.list.filter((c) => {
     if (typeFilter.value !== "all" && (c.data.type ?? "вещь") !== typeFilter.value) return false;
+    if (categoryFilter.value !== "all" && c.data.category !== categoryFilter.value) return false;
     if (!q) return true;
     return [c.data.title, c.data.category, c.slug].some((v) => typeof v === "string" && v.toLowerCase().includes(q));
   });
@@ -44,12 +55,37 @@ function subtitle(data: Record<string, unknown>) {
         <SearchIcon class="text-muted-foreground absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
         <Input id="item-search" v-model="query" placeholder="Поиск по вишлисту" class="pl-8" />
       </div>
-      <Tabs v-if="presentTypes.length > 1" v-model="typeFilter">
-        <TabsList class="w-full">
-          <TabsTrigger value="all">Все {{ store.list.length }}</TabsTrigger>
-          <TabsTrigger v-for="t in presentTypes" :key="t" :value="t">{{ GIFT_TYPE_LABELS[t] }}</TabsTrigger>
-        </TabsList>
-      </Tabs>
+      <!-- chips wrap, so every type fits however narrow the column gets -->
+      <div v-if="presentTypes.length > 1" class="flex flex-wrap gap-1" role="radiogroup" aria-label="Тип подарка">
+        <button
+          v-for="t in ['all', ...presentTypes] as const"
+          :key="t"
+          type="button"
+          role="radio"
+          :aria-checked="typeFilter === t"
+          class="rounded-full border px-2.5 py-0.5 text-xs whitespace-nowrap"
+          :class="
+            typeFilter === t
+              ? 'bg-foreground text-background border-foreground'
+              : 'text-muted-foreground hover:bg-muted'
+          "
+          @click="typeFilter = t"
+        >
+          {{ t === "all" ? "Все" : GIFT_TYPE_LABELS[t] }}
+          <span class="opacity-60">{{ t === "all" ? store.list.length : countOfType(t) }}</span>
+        </button>
+      </div>
+      <Select v-if="store.categories.length > 1" v-model="categoryFilter">
+        <SelectTrigger size="sm" class="w-full text-xs">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">Все категории</SelectItem>
+          <SelectItem v-for="c in store.categories" :key="c.name" :value="c.name">
+            {{ c.name }} <span class="text-muted-foreground">{{ c.count }}</span>
+          </SelectItem>
+        </SelectContent>
+      </Select>
       <Button variant="outline" class="w-full" :disabled="store.frozen" @click="creating = true">
         <PlusIcon /> Новая карточка
       </Button>

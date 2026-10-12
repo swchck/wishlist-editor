@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, unref, type MaybeRef } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, unref, watch, type MaybeRef } from "vue";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   CheckIcon,
@@ -7,11 +7,24 @@ import {
   CircleAlertIcon,
   ExternalLinkIcon,
   Loader2Icon,
+  ListIcon,
   PanelLeftIcon,
+  PlusIcon,
   PanelRightIcon,
   UploadIcon,
 } from "@lucide/vue";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { toast } from "vue-sonner";
+import { api, errorMessage, type RemoteWishlist } from "@/lib/api";
+import { useCreate } from "@/stores/create";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import ItemList from "./ItemList.vue";
@@ -28,6 +41,26 @@ const publish = usePublish();
 const publishing = ref(false);
 const repoName = computed(() => (store.repo ? `${store.repo.owner}/${store.repo.name}` : ""));
 const count = computed(() => store.changes.length || (store.ahead ? 1 : 0));
+
+const create = useCreate();
+const others = ref<RemoteWishlist[] | null>(null);
+const switcherOpen = ref(false);
+// a bare @update:open listener made reka treat the menu as controlled and snap it shut
+watch(switcherOpen, async (open) => {
+  if (open) others.value = await api.listWishlists().catch(() => []);
+});
+async function switchTo(w: RemoteWishlist) {
+  if (store.repo && w.owner === store.repo.owner && w.name === store.repo.name) return;
+  try {
+    await store.open(w);
+  } catch (e) {
+    toast.error("Не удалось открыть вишлист", { description: errorMessage(e) });
+  }
+}
+async function newWishlist() {
+  create.wizardOpen = true;
+  await store.close();
+}
 
 interface PanelApi {
   collapse: () => void;
@@ -77,15 +110,29 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       >
         <PanelLeftIcon />
       </Button>
-      <Button
-        variant="outline"
-        size="sm"
-        class="h-7 font-mono text-xs"
-        title="Открыть другой вишлист"
-        @click="store.close()"
-      >
-        {{ repoName }} <ChevronDownIcon />
-      </Button>
+      <DropdownMenu v-model:open="switcherOpen">
+        <DropdownMenuTrigger as-child>
+          <Button variant="outline" size="sm" class="h-7 font-mono text-xs" :disabled="store.locked">
+            {{ repoName }} <ChevronDownIcon />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" class="w-72">
+          <DropdownMenuLabel class="text-muted-foreground text-xs font-normal">Ваши вишлисты</DropdownMenuLabel>
+          <DropdownMenuItem v-if="others === null" disabled>
+            <Loader2Icon class="animate-spin" /> Загружаю…
+          </DropdownMenuItem>
+          <DropdownMenuItem v-for="w in others ?? []" :key="`${w.owner}/${w.name}`" @select="switchTo(w)">
+            <CheckIcon :class="`${w.owner}/${w.name}` === repoName ? 'opacity-100' : 'opacity-0'" />
+            <span class="min-w-0 flex-1">
+              <span class="block truncate">{{ w.title ?? w.name }}</span>
+              <span class="text-muted-foreground block truncate font-mono text-[11px]">{{ w.owner }}/{{ w.name }}</span>
+            </span>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem @select="newWishlist"><PlusIcon /> Создать новый вишлист…</DropdownMenuItem>
+          <DropdownMenuItem @select="store.close()"><ListIcon /> Все вишлисты</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
       <span class="text-muted-foreground flex items-center gap-1.5 text-xs">
         <template v-if="store.saveState === 'saving' || store.saveState === 'pending'">
           <Loader2Icon class="size-3.5 animate-spin" /> Сохраняю…

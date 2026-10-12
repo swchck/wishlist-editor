@@ -43,7 +43,7 @@ const opening = ref<string | null>(null);
 const create = useCreate();
 const removing = ref<{ target: RemoveTarget; mode: "delete" | "forget" } | null>(null);
 // a wizard left mid-way (window closed on the progress page) reopens where it stopped
-const creating = ref(create.running || (create.steps.repo !== "waiting" && !create.finished));
+if (create.running || (create.steps.repo !== "waiting" && !create.finished)) create.wizardOpen = true;
 
 async function load() {
   rows.value = null;
@@ -79,9 +79,9 @@ onMounted(load);
 
 <template>
   <CreateWizard
-    v-if="creating"
+    v-if="create.wizardOpen"
     @back="
-      creating = false;
+      create.wizardOpen = false;
       load();
     "
   />
@@ -161,7 +161,7 @@ onMounted(load);
           offline ? "На этом компьютере пока нет скачанных вишлистов." : "Пока ни одного вишлиста — создайте первый."
         }}
       </p>
-      <Button v-if="!offline" variant="outline" class="w-fit" :disabled="!!opening" @click="creating = true">
+      <Button v-if="!offline" variant="outline" class="w-fit" :disabled="!!opening" @click="create.wizardOpen = true">
         <PlusIcon /> Создать новый вишлист
       </Button>
       <p v-if="opening" class="text-muted-foreground text-xs">

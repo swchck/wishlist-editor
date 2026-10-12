@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed } from "vue";
-import { CircleAlertIcon, CircleCheckIcon, PlusIcon, XIcon } from "@lucide/vue";
+import { computed, ref, watch } from "vue";
+import { ChevronLeftIcon, ChevronRightIcon, CircleAlertIcon, CircleCheckIcon, PlusIcon, XIcon } from "@lucide/vue";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -20,6 +20,19 @@ const d = computed(() => props.card.data);
 const ro = computed(() => store.frozen || !props.card.file);
 
 const photos = computed(() => photosOf(d.value as never));
+// which photo the preview shows; the site's card cycles through them the same way
+const shownPhoto = ref(0);
+watch(
+  () => props.card.slug,
+  () => (shownPhoto.value = 0),
+);
+watch(photos, (list) => {
+  if (shownPhoto.value >= list.length) shownPhoto.value = Math.max(0, list.length - 1);
+});
+function step(by: number) {
+  const n = photos.value.length;
+  if (n) shownPhoto.value = (shownPhoto.value + by + n) % n;
+}
 const links = computed<Link[]>(() => (Array.isArray(d.value.links) ? (d.value.links as Link[]) : []));
 const price = computed(() => formatPrice(d.value.price, d.value.currency ?? store.config?.defaultCurrency));
 const typeLabel = computed(() => GIFT_TYPE_LABELS[(d.value.type as GiftType) ?? "вещь"] ?? String(d.value.type));
@@ -73,11 +86,38 @@ function fieldName(path: string) {
       <section class="grid gap-2">
         <h4 class="text-muted-foreground text-[11px] font-semibold tracking-wider uppercase">Как увидят гости</h4>
         <div class="bg-card overflow-hidden rounded-xl border" :class="{ 'opacity-50': d.hidden }">
-          <CardThumb
-            :src="photos[0]"
-            :title="String(d.title ?? card.slug)"
-            class="aspect-[4/3] w-full rounded-none border-0 text-2xl"
-          />
+          <div class="group/photo relative">
+            <CardThumb
+              :src="photos[shownPhoto]"
+              :title="String(d.title ?? card.slug)"
+              class="aspect-[4/3] w-full rounded-none border-0 text-2xl"
+            />
+            <template v-if="photos.length > 1">
+              <button
+                v-for="dir in [-1, 1]"
+                :key="dir"
+                type="button"
+                class="bg-background/80 absolute top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded-full opacity-0 shadow transition-opacity group-hover/photo:opacity-100 focus-visible:opacity-100"
+                :class="dir < 0 ? 'left-2' : 'right-2'"
+                :aria-label="dir < 0 ? 'Предыдущее фото' : 'Следующее фото'"
+                @click="step(dir)"
+              >
+                <ChevronLeftIcon v-if="dir < 0" class="size-4" />
+                <ChevronRightIcon v-else class="size-4" />
+              </button>
+              <div class="absolute inset-x-0 bottom-2 flex justify-center gap-1.5">
+                <button
+                  v-for="(_, i) in photos"
+                  :key="i"
+                  type="button"
+                  :aria-label="`Фото ${i + 1}`"
+                  class="size-1.5 rounded-full shadow"
+                  :class="i === shownPhoto ? 'bg-white' : 'bg-white/50'"
+                  @click="shownPhoto = i"
+                />
+              </div>
+            </template>
+          </div>
           <div class="grid gap-0.5 p-3">
             <div class="text-muted-foreground text-xs">{{ [d.category, typeLabel].filter(Boolean).join(" · ") }}</div>
             <div class="text-sm leading-snug font-semibold">{{ d.title || "Без названия" }}</div>
@@ -132,7 +172,10 @@ function fieldName(path: string) {
           @keydown.enter.prevent="
             (e: KeyboardEvent) => {
               const el = e.target as HTMLInputElement;
-              if (el.value.trim()) setPhotos([...photos, el.value.trim()]);
+              if (el.value.trim()) {
+                setPhotos([...photos, el.value.trim()]);
+                shownPhoto = photos.length - 1;
+              }
               el.value = '';
             }
           "

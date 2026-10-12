@@ -28,6 +28,8 @@ export const useCreate = defineStore("create", () => {
   /** Commit that triggers the first deploy; kept so a retry can resume watching it. */
   const sha = ref<string | null>(null);
   const running = ref(false);
+  /** The picker shows the wizard instead of the list; the editor's switcher can ask for it too. */
+  const wizardOpen = ref(false);
   const finished = ref(false);
 
   function reset() {
@@ -117,6 +119,7 @@ export const useCreate = defineStore("create", () => {
     siteUrl,
     run,
     running,
+    wizardOpen,
     finished,
     reset,
     start,

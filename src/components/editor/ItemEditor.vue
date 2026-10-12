@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
+import { useResizeObserver } from "@vueuse/core";
 import { toast } from "vue-sonner";
 import { MoreHorizontalIcon, Trash2Icon, PencilIcon } from "@lucide/vue";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import Field from "./Field.vue";
 import PriorityMeter from "./PriorityMeter.vue";
+import CategoryPicker from "./CategoryPicker.vue";
 import MarkdownEditor from "./MarkdownEditor.vue";
 import DeleteItemDialog from "./DeleteItemDialog.vue";
 import RenameItemDialog from "./RenameItemDialog.vue";
@@ -29,6 +31,17 @@ const deleting = ref(false);
 const renaming = ref(false);
 
 const d = computed(() => props.card.data);
+
+const titleEl = ref<HTMLTextAreaElement>();
+function fitTitle() {
+  const el = titleEl.value;
+  if (!el) return;
+  el.style.height = "auto";
+  el.style.height = `${el.scrollHeight}px`;
+}
+onMounted(fitTitle);
+// the column width changes when panels are dragged or collapsed
+useResizeObserver(titleEl, fitTitle);
 const err = computed(() => props.card.errors);
 const ro = computed(() => store.frozen || !props.card.file);
 
@@ -88,13 +101,20 @@ function onRenamed(slug: string) {
 
       <template v-else>
         <div class="grid gap-1">
-          <input
+          <!-- a textarea so long titles wrap; Enter is blocked, the title stays one YAML line -->
+          <textarea
             id="item-title"
+            ref="titleEl"
             :value="str(d.title)"
             :readonly="ro"
+            rows="1"
             placeholder="Название подарка"
-            class="placeholder:text-muted-foreground/60 w-full bg-transparent text-xl leading-tight font-bold tracking-tight outline-none @xl:text-[26px]"
-            @input="set('title', ($event.target as HTMLInputElement).value)"
+            class="placeholder:text-muted-foreground/60 w-full resize-none overflow-hidden bg-transparent text-xl leading-tight font-bold tracking-tight outline-none @xl:text-[26px]"
+            @keydown.enter.prevent
+            @input="
+              set('title', ($event.target as HTMLTextAreaElement).value.replace(/\n/g, ' '));
+              fitTitle();
+            "
           />
           <p v-if="err.title" class="text-destructive text-xs">{{ err.title }}</p>
         </div>
@@ -131,17 +151,12 @@ function onRenamed(slug: string) {
             </ToggleGroup>
           </Field>
           <Field label="Категория" for="item-category" class="col-span-4 @xl:col-span-2">
-            <Input
-              id="item-category"
+            <CategoryPicker
               :model-value="str(d.category)"
-              list="known-categories"
-              placeholder="Музыка, Кухня…"
-              :readonly="ro"
-              @update:model-value="(v) => set('category', String(v).trim() || undefined)"
+              :options="store.categories"
+              :disabled="ro"
+              @update:model-value="(v) => set('category', v || undefined)"
             />
-            <datalist id="known-categories">
-              <option v-for="c in store.categories" :key="c" :value="c" />
-            </datalist>
           </Field>
           <Field label="Желательный срок" for="item-deadline" :error="err.deadline" class="col-span-4 @xl:col-span-2">
             <Input

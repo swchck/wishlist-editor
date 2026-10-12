@@ -74,13 +74,22 @@ mockIPC(
         await wait(400);
         return [
           { ...REPO, title: "Мой вишлист", listId: "swchck/wishlist", items: files.size, siteUrl: SITE, updatedAt: "" },
+          {
+            owner: "swchck",
+            name: "wishlist-test",
+            title: "Тестовый",
+            listId: "swchck/wishlist-test",
+            items: 2,
+            siteUrl: SITE,
+            updatedAt: "",
+          },
         ];
       case "local_wishlists":
         return [REPO];
       case "open_repo":
         await wait(300);
         return {
-          repo: REPO,
+          repo: { owner: String(a.owner), name: String(a.name) },
           snapshot: snapshot(),
           state: { changes: changes(), ahead: 0, behind: 0 },
           pull: "up_to_date",
