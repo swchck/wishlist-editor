@@ -14,7 +14,10 @@ use crate::error::{AppError, AppResult};
 /// Public client id of the "Wishlist Editor" OAuth App; device flow needs no secret.
 pub const CLIENT_ID: &str = "Ov23liPUzGIoKXZAKhsJ";
 /// Enough to clone, push to and create public repositories, and to enable Pages on them.
-const SCOPE: &str = "public_repo";
+pub const SIGN_IN_SCOPE: &str = "public_repo";
+/// Asked for only at the moment of deleting a wishlist; that token is used once and dropped,
+/// so the stored one can never delete repositories.
+pub const DELETE_SCOPE: &str = "delete_repo";
 const KEYRING_SERVICE: &str = "dev.swchck.wishlist-editor";
 const KEYRING_USER: &str = "github";
 
@@ -46,11 +49,11 @@ impl From<&DeviceCode> for DevicePrompt {
     }
 }
 
-pub async fn request_code(http: &Client) -> AppResult<DeviceCode> {
+pub async fn request_code(http: &Client, scope: &str) -> AppResult<DeviceCode> {
     let resp = http
         .post("https://github.com/login/device/code")
         .header(ACCEPT, "application/json")
-        .form(&[("client_id", CLIENT_ID), ("scope", SCOPE)])
+        .form(&[("client_id", CLIENT_ID), ("scope", scope)])
         .send()
         .await?;
     if !resp.status().is_success() {

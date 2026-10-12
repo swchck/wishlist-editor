@@ -72,7 +72,9 @@ mockIPC(
         return;
       case "list_wishlists":
         await wait(400);
-        return [{ ...REPO, title: "Мой вишлист", items: files.size, siteUrl: SITE, updatedAt: "" }];
+        return [
+          { ...REPO, title: "Мой вишлист", listId: "swchck/wishlist", items: files.size, siteUrl: SITE, updatedAt: "" },
+        ];
       case "local_wishlists":
         return [REPO];
       case "open_repo":
@@ -144,6 +146,17 @@ mockIPC(
         await wait(1500);
         deployTicks = 0;
         return { sha: "5b02e1d".padEnd(40, "0"), siteUrl: `https://swchck.github.io/${a.name}/` };
+      case "local_status":
+        return { cloned: true, unpublished: changes().length };
+      case "forget_local":
+        return;
+      case "delete_start":
+        return { userCode: "DEL3-7XQ2", verificationUri: "https://github.com/login/device", expiresIn: 900 };
+      case "delete_wait":
+        await wait(2500);
+        return;
+      case "delete_cancel":
+        return;
       case "write_item":
         files.set(String(a.slug), String(a.text));
         return;

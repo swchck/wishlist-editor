@@ -40,6 +40,8 @@ pub struct RemoteWishlist {
     pub owner: String,
     pub name: String,
     pub title: Option<String>,
+    /// Namespace of its reservations; `owner/name` when the config does not set one.
+    pub list_id: String,
     pub items: usize,
     pub site_url: String,
     pub updated_at: String,
@@ -233,6 +235,25 @@ impl GitHub {
         Ok(p.map(|p| p.html_url.unwrap_or_else(|| pages_url(owner, name))))
     }
 
+    /// Deletes the repository; needs a token with the `delete_repo` scope.
+    pub async fn delete_repo(&self, owner: &str, name: &str) -> AppResult<()> {
+        let resp = self
+            .req(Method::DELETE, &format!("/repos/{owner}/{name}"))
+            .send()
+            .await?;
+        match resp.status() {
+            s if s.is_success() || s == StatusCode::NOT_FOUND => Ok(()),
+            StatusCode::UNAUTHORIZED => Err(AppError::Unauthorized),
+            s => {
+                let body: serde_json::Value = resp.json().await.unwrap_or_default();
+                let msg = body["message"].as_str().unwrap_or("");
+                Err(AppError::GitHub(
+                    format!("удаление не удалось: {s} {msg}").trim().to_owned(),
+                ))
+            }
+        }
+    }
+
     /// Turns on Pages deployed from Actions; `false` when the token may not do it.
     pub async fn enable_pages(&self, owner: &str, name: &str, branch: &str) -> AppResult<bool> {
         let resp = self
@@ -340,9 +361,14 @@ impl RepoNode {
             return None;
         }
         let config = self.config?.text?;
-        let title = serde_json::from_str::<serde_json::Value>(&config)
-            .ok()
+        let parsed = serde_json::from_str::<serde_json::Value>(&config).ok();
+        let title = parsed
+            .as_ref()
             .and_then(|v| v["title"].as_str().map(str::to_owned));
+        let list_id = parsed
+            .as_ref()
+            .and_then(|v| v["listId"].as_str().map(str::to_owned))
+            .unwrap_or_else(|| format!("{}/{}", self.owner.login, self.name));
         let items = self.items.map_or(0, |t| {
             t.entries
                 .iter()
@@ -354,6 +380,7 @@ impl RepoNode {
             owner: self.owner.login,
             name: self.name,
             title,
+            list_id,
             items,
             updated_at: self.updated_at,
         })
@@ -406,6 +433,7 @@ mod tests {
                 owner: "swchck".into(),
                 name: "wishlist".into(),
                 title: Some("Мой вишлист".into()),
+                list_id: "swchck/wishlist".into(),
                 items: 2,
                 site_url: "https://swchck.github.io/wishlist/".into(),
                 updated_at: "2026-10-12T09:00:00Z".into(),

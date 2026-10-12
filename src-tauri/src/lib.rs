@@ -4,6 +4,7 @@ mod create;
 mod error;
 mod git;
 mod github;
+mod remove;
 mod workspace;
 
 use tauri::Manager;
@@ -42,6 +43,11 @@ pub fn run() {
             create::ensure_pages,
             create::check_reservations,
             create::finish_setup,
+            remove::local_status,
+            remove::forget_local,
+            remove::delete_start,
+            remove::delete_wait,
+            remove::delete_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -74,12 +74,15 @@ pub struct AppState {
     repo: Mutex<Option<OpenRepo>>,
     flow: Mutex<Option<DeviceCode>>,
     flow_generation: AtomicU64,
+    /// The pending delete_repo confirmation and the repo it is for.
+    pub(crate) deletion: Mutex<Option<(DeviceCode, RepoId)>>,
+    pub(crate) deletion_generation: AtomicU64,
     /// Serializes everything that touches the open clone: a card saved while publish runs
     /// would otherwise land between commit and the forced checkout and be overwritten.
     repo_lock: Arc<Mutex<()>>,
 }
 
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+pub(crate) fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -97,11 +100,13 @@ impl AppState {
             repo: Mutex::new(None),
             flow: Mutex::new(None),
             flow_generation: AtomicU64::new(0),
+            deletion: Mutex::new(None),
+            deletion_generation: AtomicU64::new(0),
             repo_lock: Arc::new(Mutex::new(())),
         }
     }
 
-    fn repos_dir(&self) -> PathBuf {
+    pub(crate) fn repos_dir(&self) -> PathBuf {
         self.data_dir.join("repos")
     }
 
@@ -111,6 +116,18 @@ impl AppState {
 
     pub(crate) fn session(&self) -> AppResult<Session> {
         lock(&self.session).clone().ok_or(AppError::NotSignedIn)
+    }
+
+    /// Forgets the open repo if it is `id`, so nothing writes into a folder being removed.
+    pub(crate) fn close_if_open(&self, id: &RepoId) {
+        let mut guard = lock(&self.repo);
+        if guard.as_ref().is_some_and(|o| &o.id == id) {
+            *guard = None;
+        }
+    }
+
+    pub(crate) fn repo_lock(&self) -> Arc<Mutex<()>> {
+        Arc::clone(&self.repo_lock)
     }
 
     pub(crate) fn http(&self) -> &reqwest::Client {
@@ -223,7 +240,7 @@ pub async fn auth_status(state: State<'_, AppState>) -> AppResult<AuthStatus> {
 
 #[tauri::command]
 pub async fn auth_start(state: State<'_, AppState>) -> AppResult<DevicePrompt> {
-    let code = auth::request_code(&state.http).await?;
+    let code = auth::request_code(&state.http, auth::SIGN_IN_SCOPE).await?;
     let prompt = DevicePrompt::from(&code);
     state.flow_generation.fetch_add(1, Ordering::SeqCst);
     *lock(&state.flow) = Some(code);

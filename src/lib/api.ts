@@ -39,6 +39,7 @@ export interface RepoId {
 
 export interface RemoteWishlist extends RepoId {
   title: string | null;
+  listId: string;
   items: number;
   siteUrl: string;
   updatedAt: string;
@@ -104,6 +105,12 @@ export interface Setup {
   keepExamples: boolean;
 }
 
+export interface LocalStatus {
+  cloned: boolean;
+  /** Edits and commits that never reached GitHub; lost when the local copy goes. */
+  unpublished: number;
+}
+
 export interface Finished {
   sha: string | null;
   siteUrl: string;
@@ -163,6 +170,12 @@ export const api = {
   checkReservations: (url: string, anonKey: string) =>
     invoke<ReservationsCheck>("check_reservations", { url, anonKey }),
   finishSetup: (name: string, setup: Setup) => invoke<Finished>("finish_setup", { name, setup }),
+
+  localStatus: (owner: string, name: string) => invoke<LocalStatus>("local_status", { owner, name }),
+  forgetLocal: (owner: string, name: string) => invoke<void>("forget_local", { owner, name }),
+  deleteStart: (name: string) => invoke<DevicePrompt>("delete_start", { name }),
+  deleteWait: () => invoke<void>("delete_wait"),
+  deleteCancel: () => invoke<void>("delete_cancel"),
 
   listItems: () => invoke<RawItem[]>("list_items"),
   writeItem: (slug: string, text: string) => invoke<void>("write_item", { slug, text }),

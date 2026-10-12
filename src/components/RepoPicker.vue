@@ -1,6 +1,23 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
-import { ChevronRightIcon, Loader2Icon, LogOutIcon, PlusIcon, RefreshCwIcon, WifiOffIcon } from "@lucide/vue";
+import {
+  ChevronRightIcon,
+  HardDriveIcon,
+  Loader2Icon,
+  LogOutIcon,
+  MoreHorizontalIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  Trash2Icon,
+  WifiOffIcon,
+} from "@lucide/vue";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import RemoveWishlistDialog, { type RemoveTarget } from "./RemoveWishlistDialog.vue";
 import CreateWizard from "./CreateWizard.vue";
 import { useCreate } from "@/stores/create";
 import { Button } from "@/components/ui/button";
@@ -14,6 +31,7 @@ import { useWishlist } from "@/stores/wishlist";
 interface Row extends RepoId {
   title: string | null;
   items: number | null;
+  listId: string | null;
 }
 
 const session = useSession();
@@ -23,6 +41,7 @@ const offline = ref(session.offline);
 const error = ref<string | null>(null);
 const opening = ref<string | null>(null);
 const create = useCreate();
+const removing = ref<{ target: RemoveTarget; mode: "delete" | "forget" } | null>(null);
 // a wizard left mid-way (window closed on the progress page) reopens where it stopped
 const creating = ref(create.running || (create.steps.repo !== "waiting" && !create.finished));
 
@@ -39,7 +58,7 @@ async function load() {
       return;
     }
     offline.value = true;
-    rows.value = (await api.localWishlists()).map((r) => ({ ...r, title: null, items: null }));
+    rows.value = (await api.localWishlists()).map((r) => ({ ...r, title: null, items: null, listId: null }));
   }
 }
 
@@ -95,23 +114,47 @@ onMounted(load);
         <Skeleton v-for="i in 2" :key="i" class="h-14 w-full" />
       </div>
       <div v-else-if="rows.length" class="divide-y overflow-auto rounded-lg border">
-        <button
-          v-for="r in rows"
-          :key="`${r.owner}/${r.name}`"
-          class="hover:bg-muted/60 flex w-full items-center gap-3 px-4 py-3 text-left"
-          :disabled="!!opening"
-          @click="open(r)"
-        >
-          <span class="min-w-0 flex-1">
-            <span class="block truncate font-medium">{{ r.title ?? r.name }}</span>
-            <span class="text-muted-foreground block truncate font-mono text-xs">{{ r.owner }}/{{ r.name }}</span>
-          </span>
-          <span v-if="r.items !== null" class="text-muted-foreground text-xs whitespace-nowrap">
-            {{ r.items }} {{ plural(r.items, "карточка", "карточки", "карточек") }}
-          </span>
-          <Loader2Icon v-if="opening === `${r.owner}/${r.name}`" class="size-4 animate-spin" />
-          <ChevronRightIcon v-else class="text-muted-foreground size-4" />
-        </button>
+        <div v-for="r in rows" :key="`${r.owner}/${r.name}`" class="hover:bg-muted/60 flex items-center pr-2">
+          <button
+            class="flex min-w-0 flex-1 items-center gap-3 py-3 pl-4 text-left"
+            :disabled="!!opening"
+            @click="open(r)"
+          >
+            <span class="min-w-0 flex-1">
+              <span class="block truncate font-medium">{{ r.title ?? r.name }}</span>
+              <span class="text-muted-foreground block truncate font-mono text-xs">{{ r.owner }}/{{ r.name }}</span>
+            </span>
+            <span v-if="r.items !== null" class="text-muted-foreground text-xs whitespace-nowrap">
+              {{ r.items }} {{ plural(r.items, "карточка", "карточки", "карточек") }}
+            </span>
+            <Loader2Icon v-if="opening === `${r.owner}/${r.name}`" class="size-4 animate-spin" />
+            <ChevronRightIcon v-else class="text-muted-foreground size-4" />
+          </button>
+          <DropdownMenu>
+            <DropdownMenuTrigger as-child>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                :aria-label="`Действия с ${r.owner}/${r.name}`"
+                :disabled="!!opening"
+              >
+                <MoreHorizontalIcon />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" class="w-64">
+              <DropdownMenuItem @select="removing = { target: r, mode: 'forget' }">
+                <HardDriveIcon /> Убрать с этого компьютера
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                v-if="!offline && r.owner === session.user?.login"
+                variant="destructive"
+                @select="removing = { target: r, mode: 'delete' }"
+              >
+                <Trash2Icon /> Удалить вишлист…
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
       <p v-else class="text-muted-foreground text-sm">
         {{
@@ -124,6 +167,15 @@ onMounted(load);
       <p v-if="opening" class="text-muted-foreground text-xs">
         Первое открытие скачивает репозиторий — это несколько секунд.
       </p>
+      <RemoveWishlistDialog
+        :target="removing?.target ?? null"
+        :mode="removing?.mode ?? 'forget'"
+        @close="removing = null"
+        @removed="
+          removing = null;
+          load();
+        "
+      />
       <Alert v-if="error" variant="destructive">
         <AlertDescription>{{ error }}</AlertDescription>
       </Alert>
