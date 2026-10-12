@@ -27,10 +27,12 @@ jobs:
       - id: draft
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # the create response carries the id; listing releases right after creating lags
         run: |
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft \
-            --title "Wishlist Editor $GITHUB_REF_NAME" --notes-file .github/release-notes.md
-          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\" and .draft) | .id" | head -1)
+          id=$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
+            -f tag_name="$GITHUB_REF_NAME" -f name="Wishlist Editor $GITHUB_REF_NAME" \
+            -F draft=true -F body=@.github/release-notes.md --jq .id)
+          test -n "$id"
           echo "id=$id" >> "$GITHUB_OUTPUT"
 
   build:
