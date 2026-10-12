@@ -8,7 +8,8 @@
 
 @custom-variant dark (&:is(.dark *));
 /* macOS overlays traffic lights on the content; Windows keeps a native title bar */
-@custom-variant mac (&:is(.mac *));
+/* set while macOS shows the window buttons over the header; full screen hides them */
+@custom-variant traffic-lights (&:is(.traffic-lights *));
 
 /* the nova registry style targets Base UI attributes (data-checked, data-open…), while
    reka-ui marks state as data-state="…" and data-orientation="…"; map one onto the other */

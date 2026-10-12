@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Crepe } from "@milkdown/crepe";
+import { remarkPreserveEmptyLinePlugin } from "@milkdown/kit/preset/commonmark";
 import "@milkdown/crepe/theme/common/style.css";
 import "@milkdown/crepe/theme/frame.css";
 
@@ -62,6 +63,8 @@ onMounted(async () => {
         },
         advancedGroup: null,
       },
+      // the JS-drawn caret trails behind typing in WKWebView; the native one doesn't
+      [Crepe.Feature.Cursor]: { virtual: false },
       [Crepe.Feature.Placeholder]: {
         text: "Пожелания по цвету, размеру, альтернативы… Наберите / для блоков",
         mode: "doc",
@@ -69,6 +72,9 @@ onMounted(async () => {
     },
   });
   crepe = editor;
+  // the plugin writes every empty paragraph as a literal `<br />`, so a dismissed "+" or a
+  // double Enter left stray line breaks on the site; dropped, empty paragraphs just vanish
+  await editor.editor.remove(remarkPreserveEmptyLinePlugin);
   editor.on((l) =>
     // Crepe re-serializes on load; only real edits may rewrite the body, or opening
     // a card would reformat its markdown on disk
@@ -87,11 +93,12 @@ onMounted(async () => {
   document.addEventListener("pointerdown", closeMenusOutside, true);
 });
 
-// Crepe closes its slash menu on Escape but not on a click elsewhere in the app
+// Crepe hides its menu only when the caret leaves the block, so a click on empty editor
+// space or anywhere else in the app left it open; Escape is the one way it closes itself
 function closeMenusOutside(e: PointerEvent) {
-  const target = e.target as Node;
+  const target = e.target as Element;
   const menu = document.querySelector('.milkdown-slash-menu[data-show="true"]');
-  if (!menu || menu.contains(target) || root.value?.contains(target)) return;
+  if (!menu || menu.contains(target) || target.closest?.(".milkdown-block-handle")) return;
   root.value
     ?.querySelector(".ProseMirror")
     ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
@@ -156,13 +163,13 @@ body .milkdown {
   border-radius: 10px;
   box-shadow: 0 12px 32px -12px rgb(0 0 0 / 0.25);
 }
-#md-menu-layer .milkdown-slash-menu .tab-group ul {
-  padding: 6px 8px;
-  gap: 4px;
+/* group tabs duplicate the group headings right below them in a menu this short */
+#md-menu-layer .milkdown-slash-menu .tab-group {
+  display: none;
 }
-#md-menu-layer .milkdown-slash-menu .tab-group li {
-  padding: 4px 10px;
-  font-size: 13px;
+/* the handle sliding 0.2 s after the pointer reads as lag */
+body .milkdown .milkdown-block-handle {
+  transition: opacity 0.15s;
 }
 #md-menu-layer .milkdown-slash-menu .menu-groups {
   max-height: 320px;
