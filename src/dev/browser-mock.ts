@@ -116,7 +116,13 @@ mockIPC(
           : { status: "completed", conclusion: "success", htmlUrl: "https://github.com" };
       case "check_name":
         await wait(300);
-        return a.name === "wishlist" ? "wishlist" : a.name === "dotfiles" ? "taken" : "free";
+        return a.name === "wishlist"
+          ? "wishlist"
+          : a.name === "dotfiles"
+            ? "taken"
+            : a.name === "half-done"
+              ? "unfinished"
+              : "free";
       case "create_repo":
         await wait(1500);
         return;
@@ -131,6 +137,7 @@ mockIPC(
         };
       case "check_reservations":
         await wait(600);
+        if (String(a.anonKey).startsWith("sb_secret_")) return "secretKey";
         return String(a.url).includes("old") ? "oldSchema" : String(a.anonKey).length < 5 ? "badKey" : "ready";
       case "finish_setup":
         await wait(1500);

@@ -187,6 +187,16 @@ impl GitHub {
         Self::optional(self.req(Method::GET, &format!("/repos/{owner}/{name}"))).await
     }
 
+    /// Counts commits on the default branch, stopping at 2: all callers need is "only one?".
+    pub async fn commits_up_to_two(&self, owner: &str, name: &str) -> AppResult<usize> {
+        let list: Option<Vec<serde_json::Value>> = Self::optional(self.req(
+            Method::GET,
+            &format!("/repos/{owner}/{name}/commits?per_page=2"),
+        ))
+        .await?;
+        Ok(list.map_or(0, |l| l.len()))
+    }
+
     pub async fn has_file(&self, owner: &str, name: &str, path: &str) -> AppResult<bool> {
         let found: Option<serde_json::Value> = Self::optional(self.req(
             Method::GET,

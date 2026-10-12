@@ -21,6 +21,8 @@ use crate::github::pages_url;
 use crate::workspace::{CONFIG_FILE, SCHEMA_VERSION, Workspace};
 
 pub const TEMPLATE: (&str, &str) = ("swchck", "wishlist-template");
+/// The template's example cards; the only cards the wizard ever deletes.
+const TEMPLATE_EXAMPLES: [&str; 2] = ["sony-wh-1000xm5", "master-class"];
 /// The template's files land a few seconds after `generate` returns.
 const READY_POLLS: u32 = 30;
 const READY_INTERVAL: Duration = Duration::from_secs(2);
@@ -29,7 +31,9 @@ const READY_INTERVAL: Duration = Duration::from_secs(2);
 #[serde(rename_all = "camelCase")]
 pub enum NameCheck {
     Free,
-    /// The repo exists and already holds a wishlist: resume or open it.
+    /// A copy of the template whose settings were never pushed: the wizard continues it.
+    Unfinished,
+    /// The repo exists and already holds a wishlist: open it instead.
     Wishlist,
     Taken,
 }
@@ -68,6 +72,8 @@ pub enum ReservationsCheck {
     /// schema.sql was never run in this project.
     NoSchema,
     BadKey,
+    /// A service_role / sb_secret key: it bypasses RLS and must never reach a public repo.
+    SecretKey,
     Unreachable,
 }
 
@@ -83,6 +89,18 @@ fn own_repo(state: &AppState, name: String) -> AppResult<RepoId> {
     RepoId::validated(state.session()?.user.login, name)
 }
 
+/// A repo the wizard may still configure: generated from the template and holding nothing
+/// but the commit GitHub made when copying it. Anything else is someone's real wishlist.
+async fn is_unfinished(gh: &crate::github::GitHub, id: &RepoId) -> AppResult<bool> {
+    let Some(info) = gh.repo(&id.owner, &id.name).await? else {
+        return Ok(false);
+    };
+    let ours = info
+        .template_repository
+        .is_some_and(|t| t.full_name == format!("{}/{}", TEMPLATE.0, TEMPLATE.1));
+    Ok(ours && gh.commits_up_to_two(&id.owner, &id.name).await? <= 1)
+}
+
 #[tauri::command]
 pub async fn check_name(name: String, state: State<'_, AppState>) -> AppResult<NameCheck> {
     let id = own_repo(&state, name)?;
@@ -90,7 +108,9 @@ pub async fn check_name(name: String, state: State<'_, AppState>) -> AppResult<N
     if gh.repo(&id.owner, &id.name).await?.is_none() {
         return Ok(NameCheck::Free);
     }
-    Ok(if gh.has_file(&id.owner, &id.name, CONFIG_FILE).await? {
+    Ok(if is_unfinished(&gh, &id).await? {
+        NameCheck::Unfinished
+    } else if gh.has_file(&id.owner, &id.name, CONFIG_FILE).await? {
         NameCheck::Wishlist
     } else {
         NameCheck::Taken
@@ -106,16 +126,12 @@ pub async fn create_repo(name: String, state: State<'_, AppState>) -> AppResult<
             gh.generate(TEMPLATE, &id.owner, &id.name, "Мой вишлист")
                 .await?;
         }
-        Some(info) => {
-            let ours = info
-                .template_repository
-                .is_some_and(|t| t.full_name == format!("{}/{}", TEMPLATE.0, TEMPLATE.1));
-            if !ours && !gh.has_file(&id.owner, &id.name, CONFIG_FILE).await? {
-                return Err(AppError::GitHub(format!(
-                    "репозиторий {}/{} уже есть и это не вишлист — выберите другое имя",
-                    id.owner, id.name
-                )));
-            }
+        Some(_) if is_unfinished(&gh, &id).await? => {}
+        Some(_) => {
+            return Err(AppError::GitHub(format!(
+                "репозиторий {}/{} уже есть — выберите другое имя",
+                id.owner, id.name
+            )));
         }
     }
     for _ in 0..READY_POLLS {
@@ -168,6 +184,15 @@ pub async fn check_reservations(
     state: State<'_, AppState>,
 ) -> AppResult<ReservationsCheck> {
     let base = normalize_supabase_url(&url)?;
+    if !is_public_key(&anon_key) {
+        return Ok(
+            if anon_key.trim().starts_with("sb_secret_") || anon_key.contains('.') {
+                ReservationsCheck::SecretKey
+            } else {
+                ReservationsCheck::BadKey
+            },
+        );
+    }
     let Ok(key) = HeaderValue::from_str(anon_key.trim()) else {
         return Ok(ReservationsCheck::BadKey);
     };
@@ -183,6 +208,27 @@ pub async fn check_reservations(
     let status = resp.status();
     let body: Value = resp.json().await.unwrap_or_default();
     Ok(classify_probe(status, body["code"].as_str().unwrap_or("")))
+}
+
+/// Reports whether `key` is one meant to ship in a web page: a new-style publishable key
+/// or a legacy JWT whose role is `anon`. Secret keys sit right next to it in the dashboard.
+fn is_public_key(key: &str) -> bool {
+    use base64::Engine;
+    let key = key.trim();
+    if key.starts_with("sb_publishable_") {
+        return true;
+    }
+    let mut parts = key.split('.');
+    let (Some(_), Some(payload), Some(_), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload.trim_end_matches('='))
+        .ok()
+        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
+        .is_some_and(|claims| claims["role"] == "anon")
 }
 
 fn classify_probe(status: StatusCode, code: &str) -> ReservationsCheck {
@@ -245,6 +291,11 @@ fn configure(text: &str, list_id: &str, setup: &Setup) -> AppResult<Option<Strin
     obj.insert("listId".into(), json!(list_id));
     match &setup.reservations {
         Some(r) => {
+            if !is_public_key(&r.anon_key) {
+                return Err(AppError::GitHub(
+                    "это не публичный ключ Supabase — нужен publishable (anon) key".into(),
+                ));
+            }
             let url = normalize_supabase_url(&r.url)?;
             obj.insert(
                 "reservations".into(),
@@ -265,8 +316,11 @@ fn apply_setup(ws: &Workspace, list_id: &str, setup: &Setup) -> AppResult<bool> 
         return Ok(false);
     };
     if !setup.keep_examples {
-        for item in ws.list_items()? {
-            ws.delete_item(&item.slug)?;
+        let present = ws.list_items()?;
+        for slug in TEMPLATE_EXAMPLES {
+            if present.iter().any(|i| i.slug == slug) {
+                ws.delete_item(slug)?;
+            }
         }
     }
     ws.write_config(&text)?;
@@ -281,6 +335,14 @@ pub async fn finish_setup(
 ) -> AppResult<Finished> {
     let id = own_repo(&state, name)?;
     let session = state.session()?;
+    // a settings commit stuck locally after a lost connection leaves GitHub at one commit,
+    // so the check still passes and the push below finishes the job
+    if !is_unfinished(&state.github()?, &id).await? {
+        return Err(AppError::GitHub(format!(
+            "{}/{} уже настроен — откройте его из списка вишлистов",
+            id.owner, id.name
+        )));
+    }
     open_or_clone(&state, id.clone()).await?;
     let list_id = format!("{}/{}", id.owner, id.name);
     let published = state
@@ -381,6 +443,28 @@ mod tests {
         }
     }
 
+    fn jwt(role: &str) -> String {
+        use base64::Engine;
+        let enc = |v: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v);
+        format!(
+            "{}.{}.sig",
+            enc(r#"{"alg":"HS256"}"#),
+            enc(&format!(r#"{{"role":"{role}"}}"#))
+        )
+    }
+
+    #[test]
+    fn only_public_keys_pass() {
+        assert!(is_public_key("sb_publishable_abc"));
+        assert!(is_public_key(&jwt("anon")));
+        assert!(!is_public_key(&jwt("service_role")));
+        assert!(!is_public_key("sb_secret_abc"));
+        assert!(!is_public_key("hello"));
+        let mut s = setup();
+        s.reservations.as_mut().unwrap().anon_key = jwt("service_role");
+        assert!(configure(TEMPLATE_CONFIG, "a/b", &s).is_err());
+    }
+
     #[test]
     fn probe_outcomes() {
         assert_eq!(classify_probe(StatusCode::OK, ""), ReservationsCheck::Ready);
@@ -407,9 +491,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(CONFIG_FILE), TEMPLATE_CONFIG).unwrap();
         let ws = Workspace::open(dir.path()).unwrap();
-        ws.write_item("example", "---\ntitle: x\n---\n").unwrap();
+        ws.write_item("master-class", "---\ntitle: x\n---\n")
+            .unwrap();
+        ws.write_item("my-real-gift", "---\ntitle: y\n---\n")
+            .unwrap();
         assert!(apply_setup(&ws, "a/b", &setup()).unwrap());
-        assert!(ws.list_items().unwrap().is_empty());
+        let left: Vec<_> = ws
+            .list_items()
+            .unwrap()
+            .into_iter()
+            .map(|i| i.slug)
+            .collect();
+        assert_eq!(left, ["my-real-gift"], "only the template's examples go");
         assert!(!apply_setup(&ws, "a/b", &setup()).unwrap());
     }
 }

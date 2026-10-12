@@ -82,7 +82,7 @@ export interface DeployRun {
   htmlUrl: string;
 }
 
-export type NameCheck = "free" | "wishlist" | "taken";
+export type NameCheck = "free" | "unfinished" | "wishlist" | "taken";
 
 export interface PagesState {
   enabled: boolean;
@@ -90,7 +90,7 @@ export interface PagesState {
   siteUrl: string | null;
 }
 
-export type ReservationsCheck = "ready" | "oldSchema" | "noSchema" | "badKey" | "unreachable";
+export type ReservationsCheck = "ready" | "oldSchema" | "noSchema" | "badKey" | "secretKey" | "unreachable";
 
 export interface ReservationsSettings {
   url: string;

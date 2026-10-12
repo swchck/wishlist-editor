@@ -53,7 +53,10 @@ const siteHint = computed(() => {
     : `https://${owner}.github.io/${create.name}`;
 });
 const detailsOk = computed(
-  () => nameState.value === "free" && create.title.trim().length > 0 && /^[A-Z]{3}$/.test(create.currency),
+  () =>
+    (nameState.value === "free" || nameState.value === "unfinished") &&
+    create.title.trim().length > 0 &&
+    /^[A-Z]{3}$/.test(create.currency),
 );
 
 // ---- reservations -----------------------------------------------------------------------
@@ -70,6 +73,8 @@ const PROBE_TEXT: Record<ReservationsCheck, string> = {
     "База создана по старой схеме. Владельцу базы нужно выполнить supabase/migrations/002-shared-lists.sql, затем schema.sql.",
   noSchema: "В этой базе ещё нет таблиц броней. Выполните supabase/schema.sql в SQL Editor.",
   badKey: "Supabase не принял ключ. Нужен publishable (anon) key из Project Settings → API.",
+  secretKey:
+    "Это секретный ключ — он открывает доступ ко всей базе и попал бы в публичный репозиторий. Нужен publishable (anon) key.",
   unreachable: "Не удалось связаться с Supabase. Проверьте адрес и сеть.",
 };
 
@@ -152,10 +157,16 @@ const nav = computed(() => [
           <div class="grid gap-1.5">
             <Label for="new-name">Имя репозитория</Label>
             <Input id="new-name" v-model="create.name" class="font-mono" autocomplete="off" />
-            <p class="text-xs" :class="nameState === 'free' ? 'text-muted-foreground' : 'text-destructive'">
+            <p
+              class="text-xs"
+              :class="nameState === 'free' || nameState === 'unfinished' ? 'text-muted-foreground' : 'text-destructive'"
+            >
               <template v-if="nameState === 'checking'">Проверяю…</template>
               <template v-else-if="nameState === 'free'">Сайт будет на {{ siteHint }}</template>
               <template v-else-if="nameState === 'invalid'">Латиница, цифры, точка, дефис и подчёркивание</template>
+              <template v-else-if="nameState === 'unfinished'">
+                Создание этого вишлиста не закончено — продолжим с того же места
+              </template>
               <template v-else-if="nameState === 'taken'">У вас уже есть репозиторий с таким именем</template>
               <template v-else-if="nameState === 'wishlist'">
                 Такой вишлист уже есть —
@@ -251,7 +262,7 @@ const nav = computed(() => [
               {{
                 create.finished
                   ? "Сайт опубликован. Добавляйте подарки — после «Опубликовать» они появятся на сайте."
-                  : "Около двух минут. Если закрыть окно, при следующем запуске можно продолжить с того же места."
+                  : "Около двух минут. Если закрыть окно, создание можно продолжить: «Создать новый вишлист» с тем же именем."
               }}
             </p>
           </div>
