@@ -32,6 +32,7 @@ const snapshot = () => ({
   configText: CONFIG,
   items: items(),
   files: ["images/tricky-2.webp"],
+  writable: true,
 });
 
 function changes() {

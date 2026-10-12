@@ -38,7 +38,7 @@ function subtitle(data: Record<string, unknown>) {
 </script>
 
 <template>
-  <aside class="flex min-h-0 flex-col border-r">
+  <aside class="flex min-h-0 flex-1 flex-col">
     <div class="grid gap-2.5 border-b p-3">
       <div class="relative">
         <SearchIcon class="text-muted-foreground absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />

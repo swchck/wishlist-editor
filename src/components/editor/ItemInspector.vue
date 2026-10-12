@@ -68,7 +68,7 @@ function fieldName(path: string) {
 </script>
 
 <template>
-  <ScrollArea class="bg-muted/30 min-h-0 border-l">
+  <ScrollArea class="bg-muted/30 min-h-0 flex-1">
     <div class="grid gap-5 p-4">
       <section class="grid gap-2">
         <h4 class="text-muted-foreground text-[11px] font-semibold tracking-wider uppercase">Как увидят гости</h4>

@@ -1,7 +1,17 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, unref, type MaybeRef } from "vue";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { CheckIcon, ChevronDownIcon, CircleAlertIcon, ExternalLinkIcon, Loader2Icon, UploadIcon } from "@lucide/vue";
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  CircleAlertIcon,
+  ExternalLinkIcon,
+  Loader2Icon,
+  PanelLeftIcon,
+  PanelRightIcon,
+  UploadIcon,
+} from "@lucide/vue";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import ItemList from "./ItemList.vue";
@@ -18,6 +28,37 @@ const publish = usePublish();
 const publishing = ref(false);
 const repoName = computed(() => (store.repo ? `${store.repo.owner}/${store.repo.name}` : ""));
 const count = computed(() => store.changes.length || (store.ahead ? 1 : 0));
+
+interface PanelApi {
+  collapse: () => void;
+  expand: () => void;
+  // reka exposes it as a computed ref, unwrapped only in templates
+  isCollapsed: MaybeRef<boolean>;
+}
+const left = ref<PanelApi | null>(null);
+const right = ref<PanelApi | null>(null);
+const leftCollapsed = ref(false);
+const rightCollapsed = ref(false);
+
+function toggle(panel: PanelApi | null) {
+  if (!panel) return;
+  if (unref(panel.isCollapsed)) panel.expand();
+  else panel.collapse();
+}
+
+// ⌘\ — card list, ⌥⌘\ — preview; ⌘B would have been the usual choice, but it is bold in the body editor
+function onKey(e: KeyboardEvent) {
+  if (!(e.metaKey || e.ctrlKey) || e.code !== "Backslash") return;
+  e.preventDefault();
+  toggle(e.altKey ? right.value : left.value);
+}
+onMounted(() => {
+  window.addEventListener("keydown", onKey);
+  // sizes, collapsed ones included, come back from the saved layout
+  leftCollapsed.value = !!unref(left.value?.isCollapsed);
+  rightCollapsed.value = !!unref(right.value?.isCollapsed);
+});
+onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 </script>
 
 <template>
@@ -26,6 +67,16 @@ const count = computed(() => store.changes.length || (store.ahead ? 1 : 0));
       data-tauri-drag-region
       class="bg-muted/40 flex h-11 shrink-0 items-center gap-3 border-b pr-3 pl-3 text-sm mac:pl-20"
     >
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        :aria-label="leftCollapsed ? 'Показать список карточек' : 'Скрыть список карточек'"
+        :title="`${leftCollapsed ? 'Показать' : 'Скрыть'} список карточек (⌘\\)`"
+        :aria-pressed="!leftCollapsed"
+        @click="toggle(left)"
+      >
+        <PanelLeftIcon />
+      </Button>
       <Button
         variant="outline"
         size="sm"
@@ -49,6 +100,16 @@ const count = computed(() => store.changes.length || (store.ahead ? 1 : 0));
       <div class="flex-1" data-tauri-drag-region />
       <Button v-if="store.siteUrl" variant="ghost" size="sm" @click="openUrl(store.siteUrl)">
         <ExternalLinkIcon /> Сайт
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        :aria-label="rightCollapsed ? 'Показать превью' : 'Скрыть превью'"
+        :title="`${rightCollapsed ? 'Показать' : 'Скрыть'} превью и проверку (⌥⌘\\)`"
+        :aria-pressed="!rightCollapsed"
+        @click="toggle(right)"
+      >
+        <PanelRightIcon />
       </Button>
       <Button size="sm" :disabled="!store.pending || store.readOnly" @click="publishing = true">
         <UploadIcon /> Опубликовать
@@ -78,16 +139,46 @@ const count = computed(() => store.changes.length || (store.ahead ? 1 : 0));
         >Есть правки, которые не дошли до GitHub в прошлый раз. Нажмите «Опубликовать».</AlertDescription
       >
     </Alert>
-    <div class="grid min-h-0 flex-1 grid-cols-[272px_minmax(0,1fr)_300px]">
-      <ItemList />
-      <!-- Crepe reads its text only on mount, so a reload from disk must remount it -->
-      <ItemEditor v-if="store.current" :key="`${store.current.slug}:${store.generation}`" :card="store.current" />
-      <div v-else class="text-muted-foreground grid place-items-center text-sm">
-        Карточек пока нет — создайте первую
-      </div>
-      <ItemInspector v-if="store.current" :card="store.current" />
-      <div v-else class="bg-muted/30 border-l" />
-    </div>
+    <ResizablePanelGroup direction="horizontal" auto-save-id="editor-columns" class="min-h-0 flex-1">
+      <ResizablePanel
+        ref="left"
+        size-unit="px"
+        :default-size="272"
+        :min-size="200"
+        :max-size="440"
+        collapsible
+        :collapsed-size="0"
+        class="flex min-h-0 flex-col"
+        @collapse="leftCollapsed = true"
+        @expand="leftCollapsed = false"
+      >
+        <ItemList />
+      </ResizablePanel>
+      <ResizableHandle />
+      <ResizablePanel :min-size="30" class="@container flex min-h-0 flex-col">
+        <!-- Crepe reads its text only on mount, so a reload from disk must remount it -->
+        <ItemEditor v-if="store.current" :key="`${store.current.slug}:${store.generation}`" :card="store.current" />
+        <div v-else class="text-muted-foreground grid h-full place-items-center text-sm">
+          Карточек пока нет — создайте первую
+        </div>
+      </ResizablePanel>
+      <ResizableHandle />
+      <ResizablePanel
+        ref="right"
+        size-unit="px"
+        :default-size="300"
+        :min-size="240"
+        :max-size="520"
+        collapsible
+        :collapsed-size="0"
+        class="flex min-h-0 flex-col"
+        @collapse="rightCollapsed = true"
+        @expand="rightCollapsed = false"
+      >
+        <ItemInspector v-if="store.current" :card="store.current" />
+        <div v-else class="bg-muted/30 h-full" />
+      </ResizablePanel>
+    </ResizablePanelGroup>
     <PublishSheet v-model:open="publishing" />
   </div>
 </template>

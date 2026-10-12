@@ -60,7 +60,7 @@ function onRenamed(slug: string) {
 </script>
 
 <template>
-  <ScrollArea class="min-h-0">
+  <ScrollArea class="min-h-0 flex-1">
     <div class="mx-auto grid max-w-3xl gap-5 px-8 pt-5 pb-10">
       <div class="text-muted-foreground flex items-center gap-2 font-mono text-xs">
         items/{{ card.slug }}.md
@@ -93,7 +93,7 @@ function onRenamed(slug: string) {
             :value="str(d.title)"
             :readonly="ro"
             placeholder="Название подарка"
-            class="placeholder:text-muted-foreground/60 w-full bg-transparent text-[26px] leading-tight font-bold tracking-tight outline-none"
+            class="placeholder:text-muted-foreground/60 w-full bg-transparent text-xl leading-tight font-bold tracking-tight outline-none @xl:text-[26px]"
             @input="set('title', ($event.target as HTMLInputElement).value)"
           />
           <p v-if="err.title" class="text-destructive text-xs">{{ err.title }}</p>
@@ -101,11 +101,22 @@ function onRenamed(slug: string) {
 
         <div class="grid grid-cols-4 gap-x-3 gap-y-4">
           <Field label="Тип" class="col-span-4">
+            <!-- five segments stop fitting in a narrow column; a select takes over there -->
+            <Select
+              :model-value="str(d.type) || 'вещь'"
+              :disabled="ro"
+              @update:model-value="(v) => v && set('type', v)"
+            >
+              <SelectTrigger class="w-full @xl:hidden"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem v-for="t in GIFT_TYPES" :key="t" :value="t">{{ GIFT_TYPE_LABELS[t] }}</SelectItem>
+              </SelectContent>
+            </Select>
             <ToggleGroup
               :model-value="str(d.type) || 'вещь'"
               type="single"
               variant="outline"
-              class="w-full"
+              class="hidden w-full @xl:flex"
               :disabled="ro"
               @update:model-value="(v) => v && set('type', v)"
             >
@@ -119,7 +130,7 @@ function onRenamed(slug: string) {
               </ToggleGroupItem>
             </ToggleGroup>
           </Field>
-          <Field label="Категория" for="item-category" class="col-span-2">
+          <Field label="Категория" for="item-category" class="col-span-4 @xl:col-span-2">
             <Input
               id="item-category"
               :model-value="str(d.category)"
@@ -132,7 +143,7 @@ function onRenamed(slug: string) {
               <option v-for="c in store.categories" :key="c" :value="c" />
             </datalist>
           </Field>
-          <Field label="Желательный срок" for="item-deadline" :error="err.deadline" class="col-span-2">
+          <Field label="Желательный срок" for="item-deadline" :error="err.deadline" class="col-span-4 @xl:col-span-2">
             <Input
               id="item-deadline"
               type="date"
@@ -142,7 +153,7 @@ function onRenamed(slug: string) {
             />
           </Field>
 
-          <Field label="Цена" for="item-price" :error="err.price" class="col-span-1">
+          <Field label="Цена" for="item-price" :error="err.price" class="col-span-2 @xl:col-span-1">
             <Input
               id="item-price"
               inputmode="decimal"
@@ -153,7 +164,7 @@ function onRenamed(slug: string) {
               @update:model-value="setPrice"
             />
           </Field>
-          <Field label="Валюта" :error="err.currency" class="col-span-1">
+          <Field label="Валюта" :error="err.currency" class="col-span-2 @xl:col-span-1">
             <Select :model-value="currency" :disabled="ro" @update:model-value="(v) => set('currency', v)">
               <SelectTrigger class="w-full"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -161,7 +172,7 @@ function onRenamed(slug: string) {
               </SelectContent>
             </Select>
           </Field>
-          <Field label="Насколько хочу" class="col-span-2">
+          <Field label="Насколько хочу" class="col-span-4 @xl:col-span-2">
             <PriorityMeter v-model="priority" :disabled="ro" />
           </Field>
 
@@ -194,7 +205,7 @@ function onRenamed(slug: string) {
               @update:model-value="(v) => set('hidden', v ? true : undefined)"
             />
             Спрятать с сайта
-            <span class="text-muted-foreground text-xs">— карточка останется в репозитории</span>
+            <span class="text-muted-foreground hidden text-xs @xl:inline">— карточка останется в репозитории</span>
           </label>
         </div>
 
