@@ -8,6 +8,7 @@ import "vue-sonner/style.css";
 import SignInScreen from "@/components/SignInScreen.vue";
 import RepoPicker from "@/components/RepoPicker.vue";
 import EditorLayout from "@/components/editor/EditorLayout.vue";
+import UpdateDialog from "@/components/UpdateDialog.vue";
 import { useSession } from "@/stores/session";
 import { useWishlist } from "@/stores/wishlist";
 
@@ -39,5 +40,6 @@ onMounted(() => {
   <EditorLayout v-else-if="session.phase === 'signed-in' && store.repo" />
   <RepoPicker v-else-if="session.phase === 'signed-in'" />
   <SignInScreen v-else />
+  <UpdateDialog />
   <Toaster position="bottom-right" rich-colors />
 </template>
