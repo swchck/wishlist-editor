@@ -61,8 +61,7 @@ impl Workspace {
         Ok(Self { root })
     }
 
-    #[cfg(test)]
-    fn root(&self) -> &Path {
+    pub fn root(&self) -> &Path {
         &self.root
     }
 

@@ -1,15 +1,36 @@
+mod auth;
 mod commands;
 mod error;
+mod git;
+mod github;
 mod workspace;
+
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
-        .manage(commands::AppState::default())
+        .setup(|app| {
+            let data_dir = app.path().app_data_dir()?;
+            app.manage(commands::AppState::new(data_dir));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
-            commands::open_workspace,
+            commands::auth_status,
+            commands::auth_start,
+            commands::auth_wait,
+            commands::auth_cancel,
+            commands::sign_out,
+            commands::list_wishlists,
+            commands::local_wishlists,
+            commands::open_repo,
+            commands::close_repo,
+            commands::reload,
+            commands::repo_status,
+            commands::discard_change,
+            commands::publish,
+            commands::deploy_status,
             commands::list_items,
             commands::write_item,
             commands::create_item,
