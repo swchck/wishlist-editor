@@ -21,6 +21,7 @@ export default ts.config(
       "vue/html-self-closing": "off",
       "vue/html-indent": "off",
       "vue/multi-word-component-names": "off",
+      "vue/html-closing-bracket-newline": "off",
     },
   },
 );
