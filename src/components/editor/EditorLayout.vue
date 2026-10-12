@@ -164,7 +164,7 @@ onBeforeUnmount(() => {
     </div>
     <header
       data-tauri-drag-region
-      class="bg-muted/40 flex h-11 shrink-0 items-center gap-3 border-b pr-3 pl-3 text-sm traffic-lights:pl-20"
+      class="bg-muted/40 flex h-11 shrink-0 items-center gap-3 border-b pr-3 pl-3 text-sm traffic-lights:pl-[88px]"
     >
       <Button
         variant="ghost"

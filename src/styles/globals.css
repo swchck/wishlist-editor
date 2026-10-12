@@ -140,6 +140,11 @@
   #app {
     @apply h-full;
   }
+  /* a desktop window, not a page: WebKit's rubber-band scroll dragged the whole layout */
+  html,
+  body {
+    @apply overflow-hidden overscroll-none;
+  }
   body {
     @apply bg-background text-foreground font-sans antialiased select-none;
   }
