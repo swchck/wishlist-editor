@@ -1,6 +1,6 @@
 [package]
 name = "wishlist-editor"
-version = "0.1.0"
+version = "0.2.0"
 description = "Desktop editor for a GitHub Pages wishlist"
 authors = ["swchck"]
 edition = "2024"
