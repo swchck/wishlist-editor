@@ -235,9 +235,15 @@ impl Workspace {
     /// Only picture files are reachable, so this can never hand out the config or a card.
     fn photo_path(&self, rel: &str) -> AppResult<PathBuf> {
         let bad = || AppError::NotFound(rel.to_owned());
-        let parts_ok = rel
-            .split('/')
-            .all(|p| !p.is_empty() && p != "." && p != ".." && !p.contains('\\'));
+        // a strict charset, not a blocklist: on Windows `D:x.jpg` or `a.jpg:stream` would
+        // otherwise replace the root in PathBuf::push or reach an NTFS alternate stream
+        let parts_ok = rel.split('/').all(|p| {
+            !p.is_empty()
+                && p != "."
+                && p != ".."
+                && p.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+        });
         let ext_ok = Path::new(rel)
             .extension()
             .and_then(|e| e.to_str())
@@ -278,8 +284,12 @@ impl Workspace {
         Ok(fs::read(path)?)
     }
 
+    /// Deletes an uploaded photo; files outside `images/` were put there by hand and stay.
     pub fn remove_photo(&self, rel: &str) -> AppResult<()> {
         self.ensure_writable()?;
+        if !rel.starts_with(&format!("{IMAGES_DIR}/")) {
+            return Err(AppError::NotFound(rel.to_owned()));
+        }
         Ok(fs::remove_file(self.photo_path(rel)?)?)
     }
 
@@ -521,10 +531,17 @@ mod tests {
             "../../wishlist.config.json",
             "images/missing.jpg",
             "images",
+            "D:images/x.jpg",
+            "images/C:x.jpg",
+            "images/a.jpg:stream.jpg",
+            "images/ф.jpg",
         ] {
             assert!(ws.read_photo(rel).is_err(), "{rel}");
             assert!(ws.remove_photo(rel).is_err(), "{rel}");
         }
+        fs::write(dir.path().join(ITEMS_DIR).join("by-hand.jpg"), "x").unwrap();
+        assert_eq!(ws.read_photo("by-hand.jpg").unwrap(), b"x");
+        assert!(ws.remove_photo("by-hand.jpg").is_err());
         assert!(matches!(
             ws.store_photo("../x", b"x"),
             Err(AppError::InvalidSlug(_))

@@ -14,7 +14,11 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
             let data_dir = app.path().app_data_dir()?;
             app.manage(commands::AppState::new(data_dir));
             Ok(())

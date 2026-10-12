@@ -28,14 +28,7 @@ import { slugOfPath } from "@/lib/wishlist/changes";
 const SAVE_DELAY_MS = 600;
 
 const isRemote = (ref: string) => /^https?:\/\//.test(ref);
-const MIME: Record<string, string> = {
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  png: "image/png",
-  webp: "image/webp",
-  gif: "image/gif",
-  avif: "image/avif",
-};
+const MAX_PHOTO_BYTES = 40 * 1024 * 1024;
 
 export interface Card {
   slug: string;
@@ -81,6 +74,10 @@ export const useWishlist = defineStore("wishlist", () => {
   /** Object URLs of local photos by path relative to the items folder; read lazily from disk. */
   const photoUrls = shallowReactive(new Map<string, string>());
   const photoRequested = new Set<string>();
+  // a read for a reused file name must not land after the newer one
+  const photoReads = new Map<string, number>();
+  let photoReadSeq = 0;
+  const inFlightUploads = new Set<Promise<unknown>>();
 
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   let statusTimer: ReturnType<typeof setTimeout> | undefined;
@@ -149,6 +146,7 @@ export const useWishlist = defineStore("wishlist", () => {
   }
 
   async function close() {
+    await settleUploads();
     await flushAll();
     clearTimeout(statusTimer);
     if (repo.value) await api.closeRepo();
@@ -164,6 +162,8 @@ export const useWishlist = defineStore("wishlist", () => {
 
   /** Re-reads cards from disk after git moved files underneath (publish, discard). */
   async function reload() {
+    // an upload landing after the snapshot was read would vanish from `files`
+    await settleUploads();
     await flushAll();
     applySnapshot(await api.reload());
     await refreshStatus();
@@ -221,15 +221,16 @@ export const useWishlist = defineStore("wishlist", () => {
     );
   }
 
-  async function save(slug: string) {
+  /** Writes the card if it changed; reports whether disk now matches the editor. */
+  async function save(slug: string): Promise<boolean> {
     clearTimeout(timers.get(slug));
     timers.delete(slug);
     const card = cards.get(slug);
-    if (!card?.file) return;
+    if (!card?.file) return false;
     const text = serializeItem(card.file);
     if (text === card.savedText) {
       if (!timers.size) saveState.value = "idle";
-      return;
+      return true;
     }
     saveState.value = "saving";
     try {
@@ -239,9 +240,11 @@ export const useWishlist = defineStore("wishlist", () => {
       saveError.value = null;
       saveState.value = timers.size ? "pending" : "idle";
       scheduleStatus();
+      return true;
     } catch (e) {
       saveError.value = errorMessage(e);
       saveState.value = "error";
+      return false;
     }
   }
 
@@ -290,20 +293,41 @@ export const useWishlist = defineStore("wishlist", () => {
 
   async function loadPhoto(rel: string) {
     const gen = generation.value;
+    const seq = ++photoReadSeq;
+    photoReads.set(rel, seq);
     try {
       const bytes = await api.readPhoto(rel);
-      if (gen !== generation.value || !photoRequested.has(rel)) return;
-      const type = MIME[rel.split(".").pop()!.toLowerCase()];
-      photoUrls.set(rel, URL.createObjectURL(new Blob([bytes], { type })));
+      if (gen !== generation.value || photoReads.get(rel) !== seq) return;
+      forgetPhotoUrl(rel);
+      photoUrls.set(rel, URL.createObjectURL(new Blob([bytes], { type: "image/jpeg" })));
     } catch {
       // the thumbnail falls back to initials and the inspector already lists the missing file
     }
+  }
+
+  function forgetPhotoUrl(rel: string) {
+    const url = photoUrls.get(rel);
+    if (url) URL.revokeObjectURL(url);
+    photoUrls.delete(rel);
   }
 
   function dropPhotoUrls() {
     for (const url of photoUrls.values()) URL.revokeObjectURL(url);
     photoUrls.clear();
     photoRequested.clear();
+    photoReads.clear();
+  }
+
+  // errors are computed per card on edit; a file appearing or going changes other cards' too
+  function setFiles(next: ReadonlySet<string>) {
+    files = next;
+    for (const card of cards.values()) {
+      if (card.file) cards.set(card.slug, { ...card, errors: validate(card.data, files) });
+    }
+  }
+
+  async function settleUploads() {
+    await Promise.allSettled([...inFlightUploads]);
   }
 
   // one photo goes to `image`, several to `images` — the two shapes the site's README documents
@@ -322,17 +346,34 @@ export const useWishlist = defineStore("wishlist", () => {
    * Returns one error message per picture that could not be added.
    */
   async function addPhotos(slug: string, pictures: Blob[]): Promise<string[]> {
+    if (frozen.value || !cards.get(slug)?.file) return pictures.map(() => "карточку сейчас нельзя менять");
+    const run = uploadInto(slug, pictures);
+    inFlightUploads.add(run);
+    try {
+      return await run;
+    } finally {
+      inFlightUploads.delete(run);
+    }
+  }
+
+  async function uploadInto(slug: string, pictures: Blob[]): Promise<string[]> {
     const added: string[] = [];
     const failed: string[] = [];
     for (const pic of pictures) {
+      // checked here too: a 2 GB drop would be copied into the IPC body before Rust says no
+      if (pic.size > MAX_PHOTO_BYTES) {
+        failed.push("файл больше 40 МБ");
+        continue;
+      }
       try {
         const ref = await api.addPhoto(slug, new Uint8Array(await pic.arrayBuffer()));
-        files = new Set(files).add(resolveItemPath(ref)!);
         added.push(ref);
       } catch (e) {
         failed.push(errorMessage(e));
       }
     }
+    if (!added.length) return failed;
+    setFiles(new Set([...files, ...added.map((r) => resolveItemPath(r)!)]));
     const card = cards.get(slug);
     if (card?.file && !frozen.value) setPhotos(slug, [...photosOf(card.data), ...added]);
     // renamed or deleted mid-upload: nobody references these files, so don't leave them behind
@@ -351,28 +392,28 @@ export const useWishlist = defineStore("wishlist", () => {
       slug,
       all.filter((_, i) => i !== index),
     );
-    // the card must stop pointing at the file on disk before the file goes, or a crash
-    // in between leaves a card that fails the site build
-    await save(slug);
-    if (ref) await deleteUnusedPhotos([ref]);
+    // the card on disk must stop pointing at the file before the file goes, or the site build breaks
+    if (ref && (await save(slug))) await deleteUnusedPhotos([ref]);
     scheduleStatus();
   }
 
   // only uploads live in images/; a photo kept elsewhere was put there by hand, leave it be
   async function deleteUnusedPhotos(refs: string[]) {
     const used = new Set(list.value.flatMap((c) => photosOf(c.data).map(resolveItemPath)));
+    // an unparseable card has no data to look at, but its raw text may still name the file
+    const unreadable = list.value.filter((c) => !c.file).map((c) => c.savedText);
     for (const ref of refs) {
       const rel = isRemote(ref) ? null : resolveItemPath(ref);
       if (!rel?.startsWith("images/") || used.has(rel) || !files.has(rel)) continue;
+      if (unreadable.some((text) => text.includes(rel))) continue;
       try {
         await api.removePhoto(rel);
         const next = new Set(files);
         next.delete(rel);
-        files = next;
-        const url = photoUrls.get(rel);
-        if (url) URL.revokeObjectURL(url);
-        photoUrls.delete(rel);
+        setFiles(next);
+        forgetPhotoUrl(rel);
         photoRequested.delete(rel);
+        photoReads.delete(rel);
       } catch {
         // a leftover file costs a few kilobytes in the repo; not worth failing the delete over
       }

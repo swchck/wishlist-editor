@@ -185,7 +185,7 @@ export const api = {
 
   /** Compresses and stores a photo for the card; returns its card reference, e.g. `./images/a-1.jpg`. */
   addPhoto: (slug: string, bytes: Uint8Array) => invoke<string>("add_photo", bytes, { headers: { "x-slug": slug } }),
-  /** Reads a photo by its path relative to the items folder, e.g. `images/a-1.jpg`. */
+  /** Returns a small JPEG preview of a photo by its path relative to the items folder, e.g. `images/a-1.jpg`. */
   readPhoto: (path: string) => invoke<ArrayBuffer>("read_photo", { path }),
   removePhoto: (path: string) => invoke<void>("remove_photo", { path }),
 };

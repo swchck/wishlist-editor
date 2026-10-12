@@ -529,6 +529,9 @@ pub async fn add_photo(request: Request<'_>, state: State<'_, AppState>) -> AppR
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default()
         .to_owned();
+    if bytes.len() > photos::MAX_INPUT_BYTES {
+        return Err(AppError::BadImage("файл больше 40 МБ".into()));
+    }
     let bytes = bytes.clone();
     // decoding a 40 MB photo takes a while; keep it outside the repo lock
     let jpeg = blocking(move || photos::compress(&bytes)).await?;
@@ -538,7 +541,9 @@ pub async fn add_photo(request: Request<'_>, state: State<'_, AppState>) -> AppR
 #[tauri::command]
 pub async fn read_photo(path: String, state: State<'_, AppState>) -> AppResult<Response> {
     let bytes = state.locked(move |ws| ws.read_photo(&path)).await?;
-    Ok(Response::new(bytes))
+    Ok(Response::new(
+        blocking(move || photos::preview(&bytes)).await?,
+    ))
 }
 
 #[tauri::command]

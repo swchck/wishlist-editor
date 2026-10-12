@@ -15,7 +15,11 @@ use crate::error::{AppError, AppResult};
 pub const MAX_INPUT_BYTES: usize = 40 * 1024 * 1024;
 /// Longest side of a stored photo, in pixels; the site never shows cards bigger than this.
 const MAX_SIDE: u32 = 1600;
+/// Longest side of the editor's preview of a photo already in the repo.
+const PREVIEW_SIDE: u32 = 640;
 const JPEG_QUALITY: u8 = 82;
+/// Largest decoded image, in bytes: a 48 MP phone photo is ~146 MB of RGB.
+const MAX_DECODED_BYTES: u64 = 160 * 1024 * 1024;
 
 /// File extension of every photo `compress` produces.
 pub const EXTENSION: &str = "jpg";
@@ -27,6 +31,30 @@ pub const EXTENSION: &str = "jpg";
 ///
 /// `BadImage` when the bytes are too large, not a supported format, or corrupt.
 pub fn compress(bytes: &[u8]) -> AppResult<Vec<u8>> {
+    shrink(bytes, MAX_SIDE)
+}
+
+/// Re-encodes a repo photo as a small JPEG for the editor, so a hostile repo's 40 MB
+/// files or image bombs never reach the webview's own decoders.
+///
+/// # Errors
+///
+/// `BadImage` as for [`compress`].
+pub fn preview(bytes: &[u8]) -> AppResult<Vec<u8>> {
+    shrink(bytes, PREVIEW_SIDE)
+}
+
+fn shrink(bytes: &[u8], max_side: u32) -> AppResult<Vec<u8>> {
+    // release builds abort on panic, which would take unsaved edits with them; decoders
+    // are big parsers of hostile input, so a panic here becomes an error instead
+    std::panic::catch_unwind(|| decode_and_encode(bytes, max_side)).unwrap_or_else(|_| {
+        Err(AppError::BadImage(
+            "файл повреждён или в неизвестном формате".into(),
+        ))
+    })
+}
+
+fn decode_and_encode(bytes: &[u8], max_side: u32) -> AppResult<Vec<u8>> {
     if bytes.len() > MAX_INPUT_BYTES {
         return Err(AppError::BadImage("файл больше 40 МБ".into()));
     }
@@ -38,22 +66,30 @@ pub fn compress(bytes: &[u8]) -> AppResult<Vec<u8>> {
             "формат не поддерживается — нужен JPEG, PNG, WebP или GIF".into(),
         ));
     }
-    // a 40 MB PNG can claim 60000×60000 px; refuse before allocating 14 GB for it
     let mut limits = Limits::default();
     limits.max_image_width = Some(12_000);
     limits.max_image_height = Some(12_000);
-    limits.max_alloc = Some(512 * 1024 * 1024);
+    limits.max_alloc = Some(MAX_DECODED_BYTES);
     reader.limits(limits);
 
     let bad = |e: image::ImageError| AppError::BadImage(e.to_string());
     let mut decoder = reader.into_decoder().map_err(bad)?;
+    // image 0.25 only reserves max_alloc in ImageReader::decode, not on this path: a 5 MB
+    // PNG of 12000×12000 RGBA16 would otherwise decode into 1.1 GB
+    if decoder.total_bytes() > MAX_DECODED_BYTES {
+        return Err(AppError::BadImage(
+            "слишком большое разрешение — уменьшите картинку".into(),
+        ));
+    }
     let orientation = decoder.orientation().map_err(bad)?;
     let mut img = DynamicImage::from_decoder(decoder).map_err(bad)?;
-    img.apply_orientation(orientation);
 
-    if img.width() > MAX_SIDE || img.height() > MAX_SIDE {
-        img = img.resize(MAX_SIDE, MAX_SIDE, image::imageops::FilterType::Lanczos3);
+    // thumbnail averages pixel areas without Lanczos' full-height f32 buffer; shrinking
+    // before rotating keeps the rotation copy small, and the square bound makes order moot
+    if img.width() > max_side || img.height() > max_side {
+        img = img.thumbnail(max_side, max_side);
     }
+    img.apply_orientation(orientation);
     // JPEG has no alpha: transparent PNG areas would turn black, white matches the site's cards
     let rgb = flatten_on_white(img);
 
@@ -114,6 +150,26 @@ mod tests {
         let out = compress(&encode(clear, ImageFormat::Png)).unwrap();
         let px = image::load_from_memory(&out).unwrap().into_rgb8();
         assert!(px.get_pixel(4, 4).0.iter().all(|&c| c > 245));
+    }
+
+    #[test]
+    fn rejects_pixel_bombs() {
+        // compresses to a few KB, decodes to 288 MB without the explicit total_bytes check
+        let bomb = DynamicImage::new_rgba16(6000, 6000);
+        let bytes = encode(bomb, ImageFormat::Png);
+        assert!(bytes.len() < MAX_INPUT_BYTES);
+        assert!(matches!(compress(&bytes), Err(AppError::BadImage(_))));
+    }
+
+    #[test]
+    fn previews_are_small() {
+        let out = preview(&encode(
+            DynamicImage::new_rgb8(2000, 1000),
+            ImageFormat::Png,
+        ))
+        .unwrap();
+        let back = image::load_from_memory(&out).unwrap();
+        assert_eq!((back.width(), back.height()), (640, 320));
     }
 
     #[test]

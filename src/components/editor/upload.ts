@@ -1,9 +1,9 @@
-import { ref } from "vue";
+import { reactive } from "vue";
 import { toast } from "vue-sonner";
 import { useWishlist } from "@/stores/wishlist";
 
-/** Pictures being compressed and stored right now, across every drop zone. */
-export const uploading = ref(0);
+/** Pictures being compressed and stored right now, by card slug. */
+export const uploading = reactive(new Map<string, number>());
 
 /** Returns the pictures among dropped or pasted files; everything else is ignored. */
 export function picturesOf(list: FileList | DataTransferItemList | null | undefined): File[] {
@@ -15,9 +15,14 @@ export function picturesOf(list: FileList | DataTransferItemList | null | undefi
 
 /** Uploads pictures into the card and reports the ones that did not make it. */
 export async function uploadPhotos(slug: string, pictures: File[]) {
-  if (!pictures.length) return;
   const store = useWishlist();
-  uploading.value += pictures.length;
+  if (!pictures.length || store.frozen) return;
+  const bump = (by: number) => {
+    const n = (uploading.get(slug) ?? 0) + by;
+    if (n > 0) uploading.set(slug, n);
+    else uploading.delete(slug);
+  };
+  bump(pictures.length);
   try {
     const failed = await store.addPhotos(slug, pictures);
     if (failed.length) {
@@ -26,6 +31,6 @@ export async function uploadPhotos(slug: string, pictures: File[]) {
       });
     }
   } finally {
-    uploading.value -= pictures.length;
+    bump(-pictures.length);
   }
 }

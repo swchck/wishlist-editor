@@ -92,6 +92,8 @@ function onDragEnter(e: DragEvent) {
 function onDragLeave(e: DragEvent) {
   if (isFileDrag(e)) dragDepth.value = Math.max(0, dragDepth.value - 1);
 }
+// a drop into a portalled dialog or a cancelled drag never reaches this subtree's @drop
+const endDrag = () => (dragDepth.value = 0);
 function onDrop(e: DragEvent) {
   dragDepth.value = 0;
   if (!canDrop.value || !store.current) return;
@@ -122,6 +124,8 @@ function onKey(e: KeyboardEvent) {
 onMounted(() => {
   window.addEventListener("keydown", onKey);
   window.addEventListener("paste", onPaste);
+  window.addEventListener("drop", endDrag);
+  window.addEventListener("dragend", endDrag);
   // sizes, collapsed ones included, come back from the saved layout
   leftCollapsed.value = !!unref(left.value?.isCollapsed);
   rightCollapsed.value = !!unref(right.value?.isCollapsed);
@@ -129,6 +133,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKey);
   window.removeEventListener("paste", onPaste);
+  window.removeEventListener("drop", endDrag);
+  window.removeEventListener("dragend", endDrag);
 });
 </script>
 

@@ -66,9 +66,11 @@ function setPhotos(next: string[]) {
 
 const picker = ref<HTMLInputElement>();
 async function addPictures(pictures: File[]) {
+  const slug = props.card.slug;
   const before = photos.value.length;
-  await uploadPhotos(props.card.slug, pictures);
-  if (photos.value.length > before) shownPhoto.value = before;
+  await uploadPhotos(slug, pictures);
+  // the inspector is reused when another card gets selected mid-upload
+  if (props.card.slug === slug && photos.value.length > before) shownPhoto.value = before;
 }
 function onPicked(e: Event) {
   const input = e.target as HTMLInputElement;
@@ -77,6 +79,7 @@ function onPicked(e: Event) {
 }
 // a screenshot copied to the clipboard pastes straight in; plain text pastes as usual
 function onPaste(e: ClipboardEvent) {
+  if (ro.value) return;
   const pictures = picturesOf(e.clipboardData?.items);
   if (!pictures.length) return;
   e.preventDefault();
@@ -198,7 +201,7 @@ function fieldName(path: string) {
             </button>
           </div>
           <div
-            v-for="n in uploading"
+            v-for="n in uploading.get(card.slug) ?? 0"
             :key="`up${n}`"
             class="bg-muted grid aspect-square place-items-center rounded-md border"
           >
