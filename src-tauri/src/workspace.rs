@@ -202,6 +202,17 @@ impl Workspace {
         Ok(fs::remove_file(path)?)
     }
 
+    pub fn read_config(&self) -> AppResult<String> {
+        Ok(fs::read_to_string(self.safe_path(CONFIG_FILE)?)?)
+    }
+
+    pub fn write_config(&self, text: &str) -> AppResult<()> {
+        self.ensure_writable()?;
+        let path = self.safe_path(CONFIG_FILE)?;
+        // the dot keeps this temp name apart from every card's: slugs cannot contain one
+        self.write_atomic("wishlist.config", &path, text.as_bytes())
+    }
+
     /// Renames a card file, refusing to overwrite another card.
     pub fn rename_item(&self, from: &str, to: &str) -> AppResult<()> {
         self.ensure_writable()?;
@@ -229,8 +240,8 @@ impl Workspace {
 
     /// Writes through a temp file and rename, so a crash never leaves a half-written card
     /// that would break the site build.
-    fn write_atomic(&self, slug: &str, path: &Path, bytes: &[u8]) -> AppResult<()> {
-        let tmp = self.tmp_dir()?.join(format!("wishlist-editor-{slug}.tmp"));
+    fn write_atomic(&self, name: &str, path: &Path, bytes: &[u8]) -> AppResult<()> {
+        let tmp = self.tmp_dir()?.join(format!("wishlist-editor-{name}.tmp"));
         if fs::symlink_metadata(&tmp).is_ok() {
             fs::remove_file(&tmp)?;
         }

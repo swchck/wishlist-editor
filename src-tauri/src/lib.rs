@@ -1,5 +1,6 @@
 mod auth;
 mod commands;
+mod create;
 mod error;
 mod git;
 mod github;
@@ -36,6 +37,11 @@ pub fn run() {
             commands::create_item,
             commands::delete_item,
             commands::rename_item,
+            create::check_name,
+            create::create_repo,
+            create::ensure_pages,
+            create::check_reservations,
+            create::finish_setup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -31,7 +31,7 @@ pub struct RepoId {
 }
 
 impl RepoId {
-    fn validated(owner: String, name: String) -> AppResult<Self> {
+    pub(crate) fn validated(owner: String, name: String) -> AppResult<Self> {
         let owner_ok = !owner.is_empty()
             && owner.len() <= 39
             && owner
@@ -57,9 +57,9 @@ impl RepoId {
 }
 
 #[derive(Clone)]
-struct Session {
-    token: String,
-    user: User,
+pub(crate) struct Session {
+    pub(crate) token: String,
+    pub(crate) user: User,
 }
 
 struct OpenRepo {
@@ -109,11 +109,15 @@ impl AppState {
         self.data_dir.join("user.json")
     }
 
-    fn session(&self) -> AppResult<Session> {
+    pub(crate) fn session(&self) -> AppResult<Session> {
         lock(&self.session).clone().ok_or(AppError::NotSignedIn)
     }
 
-    fn github(&self) -> AppResult<GitHub> {
+    pub(crate) fn http(&self) -> &reqwest::Client {
+        &self.http
+    }
+
+    pub(crate) fn github(&self) -> AppResult<GitHub> {
         Ok(GitHub::new(self.http.clone(), self.session()?.token))
     }
 
@@ -124,7 +128,7 @@ impl AppState {
     }
 
     /// Runs `f` on the blocking pool while holding the repo lock.
-    async fn locked<T: Send + 'static>(
+    pub(crate) async fn locked<T: Send + 'static>(
         &self,
         f: impl FnOnce(&Workspace) -> AppResult<T> + Send + 'static,
     ) -> AppResult<T> {
@@ -333,7 +337,12 @@ pub async fn open_repo(
     name: String,
     state: State<'_, AppState>,
 ) -> AppResult<Opened> {
-    let id = RepoId::validated(owner, name)?;
+    open_or_clone(&state, RepoId::validated(owner, name)?).await
+}
+
+/// Clones the repo on first use, otherwise fetches and fast-forwards when safe, then makes
+/// it the open repo.
+pub(crate) async fn open_or_clone(state: &AppState, id: RepoId) -> AppResult<Opened> {
     let path = state.repos_dir().join(&id.owner).join(&id.name);
     let token = lock(&state.session).as_ref().map(|s| s.token.clone());
     let clone_url = id.clone_url();
@@ -417,31 +426,42 @@ pub async fn publish(
     state
         .locked(move |ws| {
             ws.ensure_writable()?;
-            let repo = Repository::open(ws.root())?;
-            let sig = session.user.signature()?;
-            git::commit_all(&repo, message.trim(), &sig)?;
-            let mut attempt = 0;
-            loop {
-                attempt += 1;
-                git::fetch(&repo, Some(&session.token))?;
-                if let Integrate::Conflicts(files) = git::integrate(&repo, &sig, &choices)? {
-                    return Ok(Published::Conflicts { files });
-                }
-                if git::divergence(&repo)?.ahead == 0 {
-                    return Ok(Published::NothingToPublish);
-                }
-                match git::push(&repo, Some(&session.token)) {
-                    Ok(oid) => {
-                        return Ok(Published::Pushed {
-                            sha: oid.to_string(),
-                        });
-                    }
-                    Err(AppError::PushRejected) if attempt < PUSH_ATTEMPTS => {}
-                    Err(e) => return Err(e),
-                }
-            }
+            commit_and_push(ws, &session, &message, &choices)
         })
         .await
+}
+
+/// Commits every change, replays it onto the fetched remote tip and pushes, retrying
+/// when someone pushed in between. Caller holds the repo lock.
+pub(crate) fn commit_and_push(
+    ws: &Workspace,
+    session: &Session,
+    message: &str,
+    choices: &HashMap<String, Side>,
+) -> AppResult<Published> {
+    let repo = Repository::open(ws.root())?;
+    let sig = session.user.signature()?;
+    git::commit_all(&repo, message.trim(), &sig)?;
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        git::fetch(&repo, Some(&session.token))?;
+        if let Integrate::Conflicts(files) = git::integrate(&repo, &sig, choices)? {
+            return Ok(Published::Conflicts { files });
+        }
+        if git::divergence(&repo)?.ahead == 0 {
+            return Ok(Published::NothingToPublish);
+        }
+        match git::push(&repo, Some(&session.token)) {
+            Ok(oid) => {
+                return Ok(Published::Pushed {
+                    sha: oid.to_string(),
+                });
+            }
+            Err(AppError::PushRejected) if attempt < PUSH_ATTEMPTS => {}
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 #[tauri::command]

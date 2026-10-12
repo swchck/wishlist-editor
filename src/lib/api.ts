@@ -82,6 +82,33 @@ export interface DeployRun {
   htmlUrl: string;
 }
 
+export type NameCheck = "free" | "wishlist" | "taken";
+
+export interface PagesState {
+  enabled: boolean;
+  settingsUrl: string;
+  siteUrl: string | null;
+}
+
+export type ReservationsCheck = "ready" | "oldSchema" | "noSchema" | "badKey" | "unreachable";
+
+export interface ReservationsSettings {
+  url: string;
+  anonKey: string;
+}
+
+export interface Setup {
+  title: string;
+  defaultCurrency: string;
+  reservations: ReservationsSettings | null;
+  keepExamples: boolean;
+}
+
+export interface Finished {
+  sha: string | null;
+  siteUrl: string;
+}
+
 /** Error shape produced by the Rust `AppError` serializer. */
 export interface AppError {
   kind: string;
@@ -129,6 +156,13 @@ export const api = {
   discardChange: (path: string) => invoke<void>("discard_change", { path }),
   publish: (message: string, choices: Record<string, Side> = {}) => invoke<Published>("publish", { message, choices }),
   deployStatus: (sha: string) => invoke<DeployRun | null>("deploy_status", { sha }),
+
+  checkName: (name: string) => invoke<NameCheck>("check_name", { name }),
+  createRepo: (name: string) => invoke<void>("create_repo", { name }),
+  ensurePages: (name: string) => invoke<PagesState>("ensure_pages", { name }),
+  checkReservations: (url: string, anonKey: string) =>
+    invoke<ReservationsCheck>("check_reservations", { url, anonKey }),
+  finishSetup: (name: string, setup: Setup) => invoke<Finished>("finish_setup", { name, setup }),
 
   listItems: () => invoke<RawItem[]>("list_items"),
   writeItem: (slug: string, text: string) => invoke<void>("write_item", { slug, text }),

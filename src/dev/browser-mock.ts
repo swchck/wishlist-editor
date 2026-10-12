@@ -22,6 +22,7 @@ const REPO = { owner: "swchck", name: "wishlist" };
 const SITE = "https://swchck.github.io/wishlist/";
 let signedIn = false;
 let deployTicks = 0;
+let pagesTries = 0;
 
 type Args = Record<string, unknown>;
 const slugOf = (path: string) => path.slice(ITEMS.length, -".md".length);
@@ -113,6 +114,28 @@ mockIPC(
         return deployTicks < 3
           ? { status: "in_progress", conclusion: null, htmlUrl: "https://github.com" }
           : { status: "completed", conclusion: "success", htmlUrl: "https://github.com" };
+      case "check_name":
+        await wait(300);
+        return a.name === "wishlist" ? "wishlist" : a.name === "dotfiles" ? "taken" : "free";
+      case "create_repo":
+        await wait(1500);
+        return;
+      case "ensure_pages":
+        await wait(700);
+        // the first attempt plays the "GitHub refused, enable it by hand" path
+        pagesTries++;
+        return {
+          enabled: pagesTries > 1,
+          settingsUrl: `https://github.com/swchck/${a.name}/settings/pages`,
+          siteUrl: pagesTries > 1 ? `https://swchck.github.io/${a.name}/` : null,
+        };
+      case "check_reservations":
+        await wait(600);
+        return String(a.url).includes("old") ? "oldSchema" : String(a.anonKey).length < 5 ? "badKey" : "ready";
+      case "finish_setup":
+        await wait(1500);
+        deployTicks = 0;
+        return { sha: "5b02e1d".padEnd(40, "0"), siteUrl: `https://swchck.github.io/${a.name}/` };
       case "write_item":
         files.set(String(a.slug), String(a.text));
         return;

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
-import { ChevronRightIcon, Loader2Icon, LogOutIcon, RefreshCwIcon, WifiOffIcon } from "@lucide/vue";
+import { ChevronRightIcon, Loader2Icon, LogOutIcon, PlusIcon, RefreshCwIcon, WifiOffIcon } from "@lucide/vue";
+import CreateWizard from "./CreateWizard.vue";
+import { useCreate } from "@/stores/create";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -20,6 +22,9 @@ const rows = ref<Row[] | null>(null);
 const offline = ref(session.offline);
 const error = ref<string | null>(null);
 const opening = ref<string | null>(null);
+const create = useCreate();
+// a wizard left mid-way (window closed on the progress page) reopens where it stopped
+const creating = ref(create.running || (create.steps.repo !== "waiting" && !create.finished));
 
 async function load() {
   rows.value = null;
@@ -54,7 +59,14 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="grid h-full grid-cols-1 md:grid-cols-2">
+  <CreateWizard
+    v-if="creating"
+    @back="
+      creating = false;
+      load();
+    "
+  />
+  <div v-else class="grid h-full grid-cols-1 md:grid-cols-2">
     <div data-tauri-drag-region class="bg-muted/40 flex flex-col justify-center gap-5 border-r p-12">
       <div class="text-muted-foreground flex items-center gap-2 text-sm font-medium">
         <span class="text-foreground text-lg">✳</span> Wishlist Editor
@@ -103,11 +115,12 @@ onMounted(load);
       </div>
       <p v-else class="text-muted-foreground text-sm">
         {{
-          offline
-            ? "На этом компьютере пока нет скачанных вишлистов."
-            : "Не нашли репозиториев с wishlist.config.json. Создание нового вишлиста появится в следующей версии."
+          offline ? "На этом компьютере пока нет скачанных вишлистов." : "Пока ни одного вишлиста — создайте первый."
         }}
       </p>
+      <Button v-if="!offline" variant="outline" class="w-fit" :disabled="!!opening" @click="creating = true">
+        <PlusIcon /> Создать новый вишлист
+      </Button>
       <p v-if="opening" class="text-muted-foreground text-xs">
         Первое открытие скачивает репозиторий — это несколько секунд.
       </p>

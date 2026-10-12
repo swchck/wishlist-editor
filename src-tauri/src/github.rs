@@ -167,6 +167,91 @@ impl GitHub {
         .await?;
         Ok(runs.workflow_runs.into_iter().next())
     }
+
+    /// Sends a request whose 404 means "absent", not an error.
+    async fn optional<T: DeserializeOwned>(rb: RequestBuilder) -> AppResult<Option<T>> {
+        let resp = rb.send().await?;
+        match resp.status() {
+            StatusCode::NOT_FOUND => Ok(None),
+            StatusCode::UNAUTHORIZED => Err(AppError::Unauthorized),
+            s if s.is_success() => Ok(Some(resp.json().await?)),
+            s => {
+                let body: serde_json::Value = resp.json().await.unwrap_or_default();
+                let msg = body["message"].as_str().unwrap_or("");
+                Err(AppError::GitHub(format!("{s} {msg}").trim().to_owned()))
+            }
+        }
+    }
+
+    pub async fn repo(&self, owner: &str, name: &str) -> AppResult<Option<RepoInfo>> {
+        Self::optional(self.req(Method::GET, &format!("/repos/{owner}/{name}"))).await
+    }
+
+    pub async fn has_file(&self, owner: &str, name: &str, path: &str) -> AppResult<bool> {
+        let found: Option<serde_json::Value> = Self::optional(self.req(
+            Method::GET,
+            &format!("/repos/{owner}/{name}/contents/{path}"),
+        ))
+        .await?;
+        Ok(found.is_some())
+    }
+
+    /// Creates `owner/name` as a public copy of `template`; the files arrive asynchronously.
+    pub async fn generate(
+        &self,
+        template: (&str, &str),
+        owner: &str,
+        name: &str,
+        description: &str,
+    ) -> AppResult<()> {
+        let _: serde_json::Value = Self::send(
+            self.req(Method::POST, &format!("/repos/{}/{}/generate", template.0, template.1))
+                .json(&json!({ "owner": owner, "name": name, "description": description, "private": false })),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Returns the site URL when Pages is enabled.
+    pub async fn pages(&self, owner: &str, name: &str) -> AppResult<Option<String>> {
+        #[derive(Deserialize)]
+        struct Pages {
+            html_url: Option<String>,
+        }
+        let p: Option<Pages> =
+            Self::optional(self.req(Method::GET, &format!("/repos/{owner}/{name}/pages"))).await?;
+        Ok(p.map(|p| p.html_url.unwrap_or_else(|| pages_url(owner, name))))
+    }
+
+    /// Turns on Pages deployed from Actions; `false` when the token may not do it.
+    pub async fn enable_pages(&self, owner: &str, name: &str, branch: &str) -> AppResult<bool> {
+        let resp = self
+            .req(Method::POST, &format!("/repos/{owner}/{name}/pages"))
+            .json(&json!({ "build_type": "workflow", "source": { "branch": branch } }))
+            .send()
+            .await?;
+        match resp.status() {
+            // 409: already enabled
+            s if s.is_success() || s == StatusCode::CONFLICT => Ok(true),
+            StatusCode::UNAUTHORIZED => Err(AppError::Unauthorized),
+            // the docs ask for the `repo` scope here; with `public_repo` GitHub may refuse
+            StatusCode::FORBIDDEN | StatusCode::NOT_FOUND | StatusCode::UNPROCESSABLE_ENTITY => {
+                Ok(false)
+            }
+            s => Err(AppError::GitHub(format!("enable Pages: {s}"))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RepoInfo {
+    pub default_branch: String,
+    pub template_repository: Option<TemplateRef>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TemplateRef {
+    pub full_name: String,
 }
 
 #[derive(Deserialize)]
