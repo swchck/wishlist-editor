@@ -16,6 +16,9 @@
         },
         {
           "url": "https://*.github.io/*"
+        },
+        {
+          "url": "https://supabase.com/dashboard/*"
         }
       ]
     }

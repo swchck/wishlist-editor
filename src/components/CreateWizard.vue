@@ -90,6 +90,13 @@ async function checkReservations() {
 }
 const reservationsOk = computed(() => !useReservations.value || probe.value === "ready");
 
+// "_" makes the dashboard ask which project to open
+const SUPABASE_DASHBOARD = "https://supabase.com/dashboard/projects";
+const SUPABASE_DATA_API = "https://supabase.com/dashboard/project/_/settings/api";
+const SUPABASE_API_KEYS = "https://supabase.com/dashboard/project/_/settings/api-keys";
+const SUPABASE_NEW = "https://supabase.com/dashboard/new";
+const SCHEMA_URL = "https://github.com/swchck/wishlist-template/blob/master/supabase/schema.sql";
+
 function begin() {
   create.reservations = useReservations.value ? { url: supaUrl.value.trim(), anonKey: supaKey.value.trim() } : null;
   create.reset();
@@ -224,6 +231,51 @@ const nav = computed(() => [
                 и ключ.
               </p>
             </div>
+            <details class="bg-muted/40 rounded-lg border px-3 py-2 text-sm">
+              <summary class="cursor-pointer font-medium">Где взять URL и ключ</summary>
+              <ol class="text-muted-foreground mt-2 grid list-decimal gap-1.5 pl-5">
+                <li>
+                  Откройте проект в
+                  <button class="text-foreground underline underline-offset-2" @click="openUrl(SUPABASE_DASHBOARD)">
+                    Supabase</button
+                  >.
+                </li>
+                <li>
+                  <b class="text-foreground">Project URL</b> — Project Settings →
+                  <button class="text-foreground underline underline-offset-2" @click="openUrl(SUPABASE_DATA_API)">
+                    Data API</button
+                  >, поле «Project URL».
+                </li>
+                <li>
+                  <b class="text-foreground">Ключ</b> — Project Settings →
+                  <button class="text-foreground underline underline-offset-2" @click="openUrl(SUPABASE_API_KEYS)">
+                    API Keys</button
+                  >, «Publishable key» (<code class="font-mono text-xs">sb_publishable_…</code>). В старых проектах —
+                  вкладка «Legacy API keys», ключ <code class="font-mono text-xs">anon</code>. Ключи
+                  <code class="font-mono text-xs">secret</code> и <code class="font-mono text-xs">service_role</code> не
+                  подходят.
+                </li>
+              </ol>
+            </details>
+            <details class="bg-muted/40 rounded-lg border px-3 py-2 text-sm">
+              <summary class="cursor-pointer font-medium">Своей базы нет</summary>
+              <ol class="text-muted-foreground mt-2 grid list-decimal gap-1.5 pl-5">
+                <li>
+                  <button class="text-foreground underline underline-offset-2" @click="openUrl(SUPABASE_NEW)">
+                    Создайте бесплатный проект
+                  </button>
+                  в Supabase.
+                </li>
+                <li>
+                  В нём откройте <b class="text-foreground">SQL Editor</b>, вставьте
+                  <button class="text-foreground underline underline-offset-2" @click="openUrl(SCHEMA_URL)">
+                    schema.sql
+                  </button>
+                  целиком и нажмите Run.
+                </li>
+                <li>Возьмите URL и ключ, как описано выше, и вставьте сюда.</li>
+              </ol>
+            </details>
             <div class="flex items-center gap-3">
               <Button
                 variant="outline"
