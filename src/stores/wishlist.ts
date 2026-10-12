@@ -70,7 +70,11 @@ export const useWishlist = defineStore("wishlist", () => {
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   let statusTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const readOnly = computed(() => config.value?.schemaVersion !== SCHEMA_VERSION);
+  const writable = ref(true);
+  /** Set while publishing: git rewrites files underneath, so edits must wait. */
+  const locked = ref(false);
+  const readOnly = computed(() => !writable.value || config.value?.schemaVersion !== SCHEMA_VERSION);
+  const frozen = computed(() => readOnly.value || locked.value);
   // same order as the site: most wanted first
   const list = computed(() =>
     [...cards.values()].sort(
@@ -95,6 +99,7 @@ export const useWishlist = defineStore("wishlist", () => {
 
   function applySnapshot(snap: Snapshot) {
     config.value = ConfigSchema.parse(JSON.parse(snap.configText));
+    writable.value = snap.writable;
     files = new Set(snap.files);
     cards.clear();
     for (const raw of snap.items) cards.set(raw.slug, loadCard(raw.slug, raw.text, files));
@@ -163,14 +168,14 @@ export const useWishlist = defineStore("wishlist", () => {
 
   function updateField(slug: string, key: string, value: unknown) {
     const card = cards.get(slug);
-    if (!card?.file || readOnly.value) return;
+    if (!card?.file || frozen.value) return;
     setField(card.file, key, value);
     touch(card);
   }
 
   function updateBody(slug: string, markdown: string) {
     const card = cards.get(slug);
-    if (!card?.file || readOnly.value) return;
+    if (!card?.file || frozen.value) return;
     const body = mergeBody(card.file.body, markdown);
     if (card.file.body === body) return;
     card.file.body = body;
@@ -257,6 +262,8 @@ export const useWishlist = defineStore("wishlist", () => {
     current,
     categories,
     readOnly,
+    locked,
+    frozen,
     saveState,
     saveError,
     changes,

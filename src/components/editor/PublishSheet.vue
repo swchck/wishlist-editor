@@ -72,7 +72,8 @@ watch(
 </script>
 
 <template>
-  <Sheet v-model:open="open">
+  <!-- closing mid-publish would let edits start while git rewrites the files -->
+  <Sheet :open="open" @update:open="(v) => publish.phase !== 'publishing' && (open = v)">
     <SheetContent class="flex w-[400px] flex-col gap-0 sm:max-w-[400px]">
       <SheetHeader>
         <SheetTitle>{{ title }}</SheetTitle>

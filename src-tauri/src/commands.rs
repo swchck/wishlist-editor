@@ -6,8 +6,8 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use git2::Repository;
 use serde::{Deserialize, Serialize};
@@ -74,6 +74,9 @@ pub struct AppState {
     repo: Mutex<Option<OpenRepo>>,
     flow: Mutex<Option<DeviceCode>>,
     flow_generation: AtomicU64,
+    /// Serializes everything that touches the open clone: a card saved while publish runs
+    /// would otherwise land between commit and the forced checkout and be overwritten.
+    repo_lock: Arc<Mutex<()>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -94,6 +97,7 @@ impl AppState {
             repo: Mutex::new(None),
             flow: Mutex::new(None),
             flow_generation: AtomicU64::new(0),
+            repo_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -113,15 +117,24 @@ impl AppState {
         Ok(GitHub::new(self.http.clone(), self.session()?.token))
     }
 
-    fn open_repo(&self) -> AppResult<(RepoId, PathBuf)> {
+    fn open_repo(&self) -> AppResult<(RepoId, Workspace)> {
         let guard = lock(&self.repo);
         let open = guard.as_ref().ok_or(AppError::NoWorkspace)?;
-        Ok((open.id.clone(), open.ws.root().to_path_buf()))
+        Ok((open.id.clone(), open.ws.clone()))
     }
 
-    fn with_ws<T>(&self, f: impl FnOnce(&Workspace) -> AppResult<T>) -> AppResult<T> {
-        let guard = lock(&self.repo);
-        f(&guard.as_ref().ok_or(AppError::NoWorkspace)?.ws)
+    /// Runs `f` on the blocking pool while holding the repo lock.
+    async fn locked<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&Workspace) -> AppResult<T> + Send + 'static,
+    ) -> AppResult<T> {
+        let (_, ws) = self.open_repo()?;
+        let repo_lock = Arc::clone(&self.repo_lock);
+        blocking(move || {
+            let _guard = lock(&repo_lock);
+            f(&ws)
+        })
+        .await
     }
 
     fn remember_user(&self, user: &User) {
@@ -324,8 +337,10 @@ pub async fn open_repo(
     let path = state.repos_dir().join(&id.owner).join(&id.name);
     let token = lock(&state.session).as_ref().map(|s| s.token.clone());
     let clone_url = id.clone_url();
+    let repo_lock = Arc::clone(&state.repo_lock);
 
     let (ws, pull, snapshot, repo_st) = blocking(move || {
+        let _guard = lock(&repo_lock);
         let pull = if path.join(".git").is_dir() {
             let repo = Repository::open(&path)?;
             match git::fetch(&repo, token.as_deref()) {
@@ -361,20 +376,23 @@ pub fn close_repo(state: State<'_, AppState>) {
 }
 
 #[tauri::command]
-pub fn reload(state: State<'_, AppState>) -> AppResult<Snapshot> {
-    state.with_ws(Workspace::snapshot)
+pub async fn reload(state: State<'_, AppState>) -> AppResult<Snapshot> {
+    state.locked(Workspace::snapshot).await
 }
 
 #[tauri::command]
 pub async fn repo_status(state: State<'_, AppState>) -> AppResult<RepoState> {
-    let (_, path) = state.open_repo()?;
-    blocking(move || repo_state(&path)).await
+    state.locked(|ws| repo_state(ws.root())).await
 }
 
 #[tauri::command]
 pub async fn discard_change(path: String, state: State<'_, AppState>) -> AppResult<()> {
-    let (_, root) = state.open_repo()?;
-    blocking(move || git::discard(&Repository::open(&root)?, &path)).await
+    state
+        .locked(move |ws| {
+            ws.ensure_writable()?;
+            git::discard(&Repository::open(ws.root())?, &path)
+        })
+        .await
 }
 
 #[derive(Serialize)]
@@ -396,33 +414,34 @@ pub async fn publish(
     state: State<'_, AppState>,
 ) -> AppResult<Published> {
     let session = state.session()?;
-    let (_, root) = state.open_repo()?;
-    blocking(move || {
-        let repo = Repository::open(&root)?;
-        let sig = session.user.signature()?;
-        git::commit_all(&repo, message.trim(), &sig)?;
-        let mut attempt = 0;
-        loop {
-            attempt += 1;
-            git::fetch(&repo, Some(&session.token))?;
-            if let Integrate::Conflicts(files) = git::integrate(&repo, &sig, &choices)? {
-                return Ok(Published::Conflicts { files });
-            }
-            if git::divergence(&repo)?.ahead == 0 {
-                return Ok(Published::NothingToPublish);
-            }
-            match git::push(&repo, Some(&session.token)) {
-                Ok(oid) => {
-                    return Ok(Published::Pushed {
-                        sha: oid.to_string(),
-                    });
+    state
+        .locked(move |ws| {
+            ws.ensure_writable()?;
+            let repo = Repository::open(ws.root())?;
+            let sig = session.user.signature()?;
+            git::commit_all(&repo, message.trim(), &sig)?;
+            let mut attempt = 0;
+            loop {
+                attempt += 1;
+                git::fetch(&repo, Some(&session.token))?;
+                if let Integrate::Conflicts(files) = git::integrate(&repo, &sig, &choices)? {
+                    return Ok(Published::Conflicts { files });
                 }
-                Err(AppError::PushRejected) if attempt < PUSH_ATTEMPTS => {}
-                Err(e) => return Err(e),
+                if git::divergence(&repo)?.ahead == 0 {
+                    return Ok(Published::NothingToPublish);
+                }
+                match git::push(&repo, Some(&session.token)) {
+                    Ok(oid) => {
+                        return Ok(Published::Pushed {
+                            sha: oid.to_string(),
+                        });
+                    }
+                    Err(AppError::PushRejected) if attempt < PUSH_ATTEMPTS => {}
+                    Err(e) => return Err(e),
+                }
             }
-        }
-    })
-    .await
+        })
+        .await
 }
 
 #[tauri::command]
@@ -438,28 +457,28 @@ pub async fn deploy_status(
 }
 
 #[tauri::command]
-pub fn list_items(state: State<'_, AppState>) -> AppResult<Vec<RawItem>> {
-    state.with_ws(Workspace::list_items)
+pub async fn list_items(state: State<'_, AppState>) -> AppResult<Vec<RawItem>> {
+    state.locked(Workspace::list_items).await
 }
 
 #[tauri::command]
-pub fn write_item(slug: String, text: String, state: State<'_, AppState>) -> AppResult<()> {
-    state.with_ws(|ws| ws.write_item(&slug, &text))
+pub async fn write_item(slug: String, text: String, state: State<'_, AppState>) -> AppResult<()> {
+    state.locked(move |ws| ws.write_item(&slug, &text)).await
 }
 
 #[tauri::command]
-pub fn create_item(slug: String, text: String, state: State<'_, AppState>) -> AppResult<()> {
-    state.with_ws(|ws| ws.create_item(&slug, &text))
+pub async fn create_item(slug: String, text: String, state: State<'_, AppState>) -> AppResult<()> {
+    state.locked(move |ws| ws.create_item(&slug, &text)).await
 }
 
 #[tauri::command]
-pub fn delete_item(slug: String, state: State<'_, AppState>) -> AppResult<()> {
-    state.with_ws(|ws| ws.delete_item(&slug))
+pub async fn delete_item(slug: String, state: State<'_, AppState>) -> AppResult<()> {
+    state.locked(move |ws| ws.delete_item(&slug)).await
 }
 
 #[tauri::command]
-pub fn rename_item(from: String, to: String, state: State<'_, AppState>) -> AppResult<()> {
-    state.with_ws(|ws| ws.rename_item(&from, &to))
+pub async fn rename_item(from: String, to: String, state: State<'_, AppState>) -> AppResult<()> {
+    state.locked(move |ws| ws.rename_item(&from, &to)).await
 }
 
 #[cfg(test)]

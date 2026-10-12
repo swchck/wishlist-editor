@@ -35,18 +35,24 @@ export const usePublish = defineStore("publish", () => {
   const suggestedMessage = computed(() => commitMessage(described.value));
 
   /** Changed cards the site build would reject; publishing is blocked while any remain. */
-  const blockers = computed(() =>
-    described.value.flatMap((c) => {
-      if (!c.slug || c.kind === "deleted") return [];
-      const card = wishlist.cards.get(c.slug);
-      if (!card) return [];
-      return card.parseError || Object.keys(card.errors).length ? [{ slug: c.slug, label: c.label }] : [];
-    }),
-  );
+  const blockers = computed(() => {
+    const broken = (slug: string) => {
+      const card = wishlist.cards.get(slug);
+      return !!card && (!!card.parseError || Object.keys(card.errors).length > 0);
+    };
+    const label = (slug: string) => String(wishlist.cards.get(slug)?.data.title ?? slug);
+    // unpushed commits may hold any card, and a conflict resolved to the GitHub side
+    // brings in content nobody validated here, so then every card is checked
+    const slugs = wishlist.ahead
+      ? [...wishlist.cards.keys()]
+      : described.value.flatMap((c) => (c.slug && c.kind !== "deleted" ? [c.slug] : []));
+    return slugs.filter(broken).map((slug) => ({ slug, label: label(slug) }));
+  });
 
   async function run(message: string, choices: Record<string, Side> = {}) {
     phase.value = "publishing";
     error.value = null;
+    wishlist.locked = true;
     try {
       await wishlist.flushAll();
       const res = await api.publish(message || suggestedMessage.value, choices);
@@ -64,6 +70,8 @@ export const usePublish = defineStore("publish", () => {
       phase.value = "error";
       // a commit may have been made before the push failed; show it as pending
       await wishlist.refreshStatus().catch(() => {});
+    } finally {
+      wishlist.locked = false;
     }
   }
 

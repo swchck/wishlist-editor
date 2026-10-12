@@ -17,7 +17,7 @@ interface Link {
 const props = defineProps<{ card: Card }>();
 const store = useWishlist();
 const d = computed(() => props.card.data);
-const ro = computed(() => store.readOnly || !props.card.file);
+const ro = computed(() => store.frozen || !props.card.file);
 
 const photos = computed(() => photosOf(d.value as never));
 const links = computed<Link[]>(() => (Array.isArray(d.value.links) ? (d.value.links as Link[]) : []));

@@ -30,7 +30,7 @@ const renaming = ref(false);
 
 const d = computed(() => props.card.data);
 const err = computed(() => props.card.errors);
-const ro = computed(() => store.readOnly || !props.card.file);
+const ro = computed(() => store.frozen || !props.card.file);
 
 function set(key: string, value: unknown) {
   store.updateField(props.card.slug, key, value);

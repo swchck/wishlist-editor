@@ -1,0 +1,73 @@
+name: Release
+
+# Bump the version in package.json, src-tauri/Cargo.toml and src-tauri/tauri.conf.json,
+# then push a matching tag: git tag v0.2.0 && git push origin v0.2.0
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target aarch64-apple-darwin
+          - platform: macos-latest
+            args: --target x86_64-apple-darwin
+          - platform: windows-latest
+            args: ""
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Tag matches app version
+        shell: bash
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match tauri.conf.json version $version"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ startsWith(matrix.platform, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.args }}
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Wishlist Editor ${{ github.ref_name }}
+          releaseBody: |
+            **macOS:** `Wishlist.Editor_*_aarch64.dmg` для Apple Silicon (M1 и новее), `*_x64.dmg` для Intel.
+            Приложение не подписано сертификатом Apple: при первом запуске откройте его правой кнопкой → «Открыть»,
+            а на macOS 15 и новее — System Settings → Privacy & Security → «Open Anyway».
+
+            **Windows:** `*_x64-setup.exe`. SmartScreen предупредит о неизвестном издателе — «Подробнее» → «Выполнить в любом случае».
+          # published by the last job only once every platform has uploaded
+          releaseDraft: true
+          args: ${{ matrix.args }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest

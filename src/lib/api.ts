@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke as tauriInvoke, type InvokeArgs } from "@tauri-apps/api/core";
 
 export interface RawItem {
   slug: string;
@@ -10,6 +10,8 @@ export interface Snapshot {
   configText: string;
   items: RawItem[];
   files: string[];
+  /** False when the repo uses another schemaVersion; Rust refuses every write then. */
+  writable: boolean;
 }
 
 export interface User {
@@ -93,6 +95,22 @@ export function isAppError(e: unknown, kind?: string): e is AppError {
 export function errorMessage(e: unknown): string {
   if (e && typeof e === "object" && "message" in e) return String((e as AppError).message);
   return String(e);
+}
+
+let onUnauthorized: (() => void) | null = null;
+
+/** Registers the one place that reacts to a revoked or expired token (sign-in screen). */
+export function handleUnauthorized(fn: () => void) {
+  onUnauthorized = fn;
+}
+
+async function invoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
+  try {
+    return await tauriInvoke<T>(cmd, args);
+  } catch (e) {
+    if (isAppError(e, "unauthorized")) onUnauthorized?.();
+    throw e;
+  }
 }
 
 export const api = {

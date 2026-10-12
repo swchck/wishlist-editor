@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- macOS icon grid: 824 px body centred on a 1024 canvas, ~185 px corner radius -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#131312" />
+  <g stroke="#f3f2ef" stroke-width="56" stroke-linecap="round">
+    <line x1="512" y1="322" x2="512" y2="702" />
+    <line x1="347" y1="417" x2="677" y2="607" />
+    <line x1="347" y1="607" x2="677" y2="417" />
+  </g>
+</svg>

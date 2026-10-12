@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import { api, errorMessage, isAppError, type DevicePrompt, type User } from "@/lib/api";
+import { api, errorMessage, handleUnauthorized, isAppError, type DevicePrompt, type User } from "@/lib/api";
 
 export type SessionPhase = "checking" | "signed-out" | "awaiting-code" | "signed-in";
 
@@ -55,6 +55,12 @@ export const useSession = defineStore("session", () => {
     user.value = null;
     phase.value = "signed-out";
   }
+
+  handleUnauthorized(() => {
+    if (phase.value !== "signed-in") return;
+    error.value = "GitHub больше не принимает вход — войдите заново. Несохранённого на сайте ничего не потеряно.";
+    void signOut().catch(() => {});
+  });
 
   return { phase, user, offline, prompt, error, check, signIn, cancel, signOut };
 });

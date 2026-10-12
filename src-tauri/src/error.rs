@@ -11,6 +11,14 @@ pub enum AppError {
     InvalidSlug(String),
     #[error("недопустимое имя репозитория «{0}»")]
     InvalidRepo(String),
+    #[error(
+        "в репозитории есть символическая ссылка на пути {0} — редактор такие репозитории не открывает"
+    )]
+    UnsafeRepo(String),
+    #[error("вишлист в другом формате — обновите приложение, чтобы его править")]
+    ReadOnly,
+    #[error("репозиторий не найден на GitHub — возможно, его переименовали или удалили")]
+    RepoNotFound,
     #[error("карточка «{0}» уже существует")]
     AlreadyExists(String),
     #[error("карточка «{0}» не найдена")]
@@ -46,6 +54,9 @@ impl AppError {
             Self::NoWorkspace => "no_workspace",
             Self::InvalidSlug(_) => "invalid_slug",
             Self::InvalidRepo(_) => "invalid_repo",
+            Self::UnsafeRepo(_) => "unsafe_repo",
+            Self::ReadOnly => "read_only",
+            Self::RepoNotFound => "repo_not_found",
             Self::AlreadyExists(_) => "already_exists",
             Self::NotFound(_) => "not_found",
             Self::Offline => "offline",
@@ -83,6 +94,11 @@ impl From<git2::Error> for AppError {
                 let msg = e.message();
                 if msg.contains("401") || msg.contains("403") || msg.contains("authentication") {
                     Self::Unauthorized
+                } else if msg.contains("404") {
+                    Self::RepoNotFound
+                } else if msg.contains("status code") {
+                    // any other HTTP status means GitHub answered, so it is not "offline"
+                    Self::GitHub(msg.to_owned())
                 } else {
                     Self::Offline
                 }

@@ -171,10 +171,6 @@ pub fn changes(repo: &Repository) -> AppResult<Vec<Change>> {
     let mut out = Vec::new();
     for entry in repo.statuses(Some(&mut opts))?.iter() {
         let Ok(path) = entry.path() else { continue };
-        // a crash between write and rename in workspace::write_atomic leaves one of these
-        if path.ends_with(".tmp") {
-            continue;
-        }
         let s = entry.status();
         let kind = if s.intersects(Status::WT_NEW | Status::INDEX_NEW) {
             ChangeKind::Added
@@ -233,9 +229,7 @@ fn move_branch(repo: &Repository, to: Oid, why: &str) -> AppResult<()> {
 /// Commits every working-tree change; returns `None` when there is nothing to commit.
 pub fn commit_all(repo: &Repository, message: &str, sig: &Signature) -> AppResult<Option<Oid>> {
     let mut index = repo.index()?;
-    let mut skip_tmp =
-        |path: &Path, _: &[u8]| -> i32 { i32::from(path.extension().is_some_and(|e| e == "tmp")) };
-    index.add_all(["*"], IndexAddOption::DEFAULT, Some(&mut skip_tmp))?;
+    index.add_all(["*"], IndexAddOption::DEFAULT, None)?;
     index.update_all(["*"], None)?;
     index.write()?;
     let tree_id = index.write_tree()?;
@@ -284,8 +278,8 @@ pub fn integrate(
         return Ok(Integrate::Ready);
     }
     if repo.graph_descendant_of(remote.id(), head.id())? {
-        move_branch(repo, remote.id(), "fast-forward")?;
         repo.checkout_tree(remote.as_object(), Some(CheckoutBuilder::new().force()))?;
+        move_branch(repo, remote.id(), "fast-forward")?;
         return Ok(Integrate::Ready);
     }
 
@@ -334,12 +328,13 @@ pub fn integrate(
     let tree = repo.find_tree(index.write_tree_to(repo)?)?;
     let message = replayed_message(repo, head.id(), remote.id())?;
     let replayed = repo.commit(None, &head.author(), committer, &message, &tree, &[&remote])?;
-    move_branch(repo, replayed, "replay local changes onto remote")?;
-    // the tree was clean before this call, so force only rewrites what the replay changed
+    // files first, branch second: a crash in between leaves the remote's edits looking like
+    // local ones, which replay onto the remote as no-ops instead of silently reverting it
     repo.checkout_tree(
         repo.find_commit(replayed)?.as_object(),
         Some(CheckoutBuilder::new().force()),
     )?;
+    move_branch(repo, replayed, "replay local changes onto remote")?;
     Ok(Integrate::Ready)
 }
 
@@ -511,7 +506,6 @@ mod tests {
         let app = fx.clone("app");
         write(&app, "src/content/items/a.md", "A1\n");
         write(&app, "src/content/items/c.md", "C\n");
-        write(&app, "src/content/items/c.md.tmp", "half");
         fs::remove_file(app.workdir().unwrap().join("src/content/items/b.md")).unwrap();
         let kinds: Vec<_> = changes(&app)
             .unwrap()

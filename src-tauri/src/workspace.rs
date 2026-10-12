@@ -1,9 +1,12 @@
 //! On-disk layout of a wishlist repository (schemaVersion 1) and safe access to its cards.
 //!
-//! The webview never passes paths for card operations, only slugs; every path is
-//! built here from a validated slug, so a card write cannot escape the items folder.
+//! The webview never passes paths for card operations, only slugs; every path is built
+//! here from a validated slug. The repository content is untrusted (anyone with push
+//! access, or a stranger's repo opened by name), so no path the editor reads or writes
+//! may pass through a symlink: a planted link would otherwise turn an autosave into a
+//! write anywhere in the user's home directory.
 
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -13,6 +16,8 @@ use crate::error::{AppError, AppResult};
 
 pub const CONFIG_FILE: &str = "wishlist.config.json";
 pub const ITEMS_DIR: &str = "src/content/items";
+/// Item format this build reads and writes; must match `SCHEMA_VERSION` in src/lib/wishlist/schema.ts.
+pub const SCHEMA_VERSION: u64 = 1;
 
 const MAX_SLUG_LEN: usize = 80;
 
@@ -32,6 +37,8 @@ pub struct Snapshot {
     pub items: Vec<RawItem>,
     /// Non-card files under the items folder, relative to it, `/`-separated.
     pub files: Vec<String>,
+    /// False when the repo uses another `schemaVersion`; every write is then refused.
+    pub writable: bool,
 }
 
 /// Reports whether `slug` is a valid card file name: lowercase latin, digits and inner dashes.
@@ -45,51 +52,87 @@ pub fn is_valid_slug(slug: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
+fn is_symlink(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+}
+
 /// An opened wishlist repository rooted at a directory.
 #[derive(Debug, Clone)]
 pub struct Workspace {
     root: PathBuf,
+    writable: bool,
 }
 
 impl Workspace {
     /// Opens `root` if it contains a wishlist config file.
     pub fn open(root: impl Into<PathBuf>) -> AppResult<Self> {
         let root = root.into();
-        if !root.join(CONFIG_FILE).is_file() {
+        let config = root.join(CONFIG_FILE);
+        if is_symlink(&root) || is_symlink(&config) {
+            return Err(AppError::UnsafeRepo(CONFIG_FILE.into()));
+        }
+        if !config.is_file() {
             return Err(AppError::NotAWishlist);
         }
-        Ok(Self { root })
+        let version = serde_json::from_slice::<serde_json::Value>(&fs::read(&config)?)
+            .ok()
+            .and_then(|v| v["schemaVersion"].as_u64());
+        Ok(Self {
+            root,
+            writable: version == Some(SCHEMA_VERSION),
+        })
     }
 
     pub fn root(&self) -> &Path {
         &self.root
     }
 
-    fn items_dir(&self) -> PathBuf {
-        self.root.join(ITEMS_DIR)
+    pub fn ensure_writable(&self) -> AppResult<()> {
+        if self.writable {
+            Ok(())
+        } else {
+            Err(AppError::ReadOnly)
+        }
+    }
+
+    /// Returns `rel` under the root after checking that no component on the way is a symlink.
+    fn safe_path(&self, rel: &str) -> AppResult<PathBuf> {
+        let mut path = self.root.clone();
+        for part in rel.split('/') {
+            path.push(part);
+            if is_symlink(&path) {
+                return Err(AppError::UnsafeRepo(rel.to_owned()));
+            }
+        }
+        Ok(path)
+    }
+
+    fn items_dir(&self) -> AppResult<PathBuf> {
+        self.safe_path(ITEMS_DIR)
     }
 
     fn item_path(&self, slug: &str) -> AppResult<PathBuf> {
         if !is_valid_slug(slug) {
             return Err(AppError::InvalidSlug(slug.to_owned()));
         }
-        Ok(self.items_dir().join(format!("{slug}.md")))
+        self.safe_path(&format!("{ITEMS_DIR}/{slug}.md"))
     }
 
     /// Reads the config and every card, sorted by slug.
     pub fn snapshot(&self) -> AppResult<Snapshot> {
         Ok(Snapshot {
             root: self.root.to_string_lossy().into_owned(),
-            config_text: fs::read_to_string(self.root.join(CONFIG_FILE))?,
+            config_text: fs::read_to_string(self.safe_path(CONFIG_FILE)?)?,
             items: self.list_items()?,
             files: self.list_files()?,
+            writable: self.writable,
         })
     }
 
     /// Returns every non-`.md` file below the items folder (e.g. `images/op-1.webp`),
     /// so the editor can tell whether a card's local photo exists before the site build does.
     pub fn list_files(&self) -> AppResult<Vec<String>> {
-        let dir = self.items_dir();
+        let dir = self.items_dir()?;
         let mut out = Vec::new();
         if dir.is_dir() {
             collect_files(&dir, &dir, &mut out)?;
@@ -100,13 +143,18 @@ impl Workspace {
 
     /// Returns every `<slug>.md` directly inside the items folder, sorted by slug.
     pub fn list_items(&self) -> AppResult<Vec<RawItem>> {
-        let dir = self.items_dir();
+        let dir = self.items_dir()?;
         if !dir.is_dir() {
             return Ok(Vec::new());
         }
         let mut items = Vec::new();
         for entry in fs::read_dir(dir)? {
-            let path = entry?.path();
+            let entry = entry?;
+            // file_type() does not follow links, so a linked card is skipped, not read
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            let path = entry.path();
             let Some(slug) = path
                 .extension()
                 .filter(|ext| *ext == "md")
@@ -131,20 +179,22 @@ impl Workspace {
 
     /// Overwrites the card, creating it if needed.
     pub fn write_item(&self, slug: &str, text: &str) -> AppResult<()> {
+        self.ensure_writable()?;
         let path = self.item_path(slug)?;
-        fs::create_dir_all(self.items_dir())?;
-        write_atomic(&path, text.as_bytes())
+        fs::create_dir_all(self.items_dir()?)?;
+        self.write_atomic(slug, &path, text.as_bytes())
     }
 
     /// Creates a card and fails if one with this slug already exists.
     pub fn create_item(&self, slug: &str, text: &str) -> AppResult<()> {
-        if self.item_path(slug)?.exists() {
+        if fs::symlink_metadata(self.item_path(slug)?).is_ok() {
             return Err(AppError::AlreadyExists(slug.to_owned()));
         }
         self.write_item(slug, text)
     }
 
     pub fn delete_item(&self, slug: &str) -> AppResult<()> {
+        self.ensure_writable()?;
         let path = self.item_path(slug)?;
         if !path.exists() {
             return Err(AppError::NotFound(slug.to_owned()));
@@ -154,15 +204,45 @@ impl Workspace {
 
     /// Renames a card file, refusing to overwrite another card.
     pub fn rename_item(&self, from: &str, to: &str) -> AppResult<()> {
+        self.ensure_writable()?;
         let src = self.item_path(from)?;
         let dst = self.item_path(to)?;
         if !src.exists() {
             return Err(AppError::NotFound(from.to_owned()));
         }
-        if dst.exists() {
+        if fs::symlink_metadata(&dst).is_ok() {
             return Err(AppError::AlreadyExists(to.to_owned()));
         }
         Ok(fs::rename(src, dst)?)
+    }
+
+    /// Where half-written files live: inside `.git`, so git never sees or commits them
+    /// and nothing in the (untrusted) work tree can occupy the name first.
+    fn tmp_dir(&self) -> AppResult<PathBuf> {
+        let git = self.root.join(".git");
+        if git.is_dir() && !is_symlink(&git) {
+            Ok(git)
+        } else {
+            self.items_dir()
+        }
+    }
+
+    /// Writes through a temp file and rename, so a crash never leaves a half-written card
+    /// that would break the site build.
+    fn write_atomic(&self, slug: &str, path: &Path, bytes: &[u8]) -> AppResult<()> {
+        let tmp = self.tmp_dir()?.join(format!("wishlist-editor-{slug}.tmp"));
+        if fs::symlink_metadata(&tmp).is_ok() {
+            fs::remove_file(&tmp)?;
+        }
+        {
+            // create_new is O_CREAT|O_EXCL: it fails on any existing entry, links included
+            let mut f = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+            f.write_all(bytes)?;
+            f.sync_all()?;
+        }
+        // rename replaces a link at `path` itself, never what it points to
+        fs::rename(&tmp, path)?;
+        Ok(())
     }
 }
 
@@ -173,9 +253,10 @@ fn collect_files(base: &Path, dir: &Path, out: &mut Vec<String>) -> AppResult<()
         if entry.file_name().to_string_lossy().starts_with('.') {
             continue;
         }
-        if entry.file_type()?.is_dir() {
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
             collect_files(base, &path, out)?;
-        } else if path.extension().is_none_or(|ext| ext != "md") {
+        } else if kind.is_file() && path.extension().is_none_or(|ext| ext != "md") {
             let rel = path.strip_prefix(base).expect("walk stays under base");
             out.push(
                 rel.components()
@@ -185,19 +266,6 @@ fn collect_files(base: &Path, dir: &Path, out: &mut Vec<String>) -> AppResult<()
             );
         }
     }
-    Ok(())
-}
-
-/// Writes via a sibling temp file and rename, so a crash never leaves a half-written card
-/// that would break the site build.
-fn write_atomic(path: &Path, bytes: &[u8]) -> AppResult<()> {
-    let tmp = path.with_extension("md.tmp");
-    {
-        let mut f = fs::File::create(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
-    }
-    fs::rename(&tmp, path)?;
     Ok(())
 }
 
@@ -279,7 +347,7 @@ mod tests {
                 text: "A".into()
             }]
         );
-        assert!(!ws.root().join(ITEMS_DIR).join("c.md.tmp").exists());
+        assert!(fs::read_dir(ws.root().join(ITEMS_DIR)).unwrap().count() == 1);
     }
 
     #[test]
@@ -315,5 +383,60 @@ mod tests {
         assert_eq!(ws.list_files().unwrap(), ["notes.txt"]);
         fs::write(dir.join("images/op-1.webp"), "x").unwrap();
         assert_eq!(ws.list_files().unwrap(), ["images/op-1.webp", "notes.txt"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn planted_symlinks_cannot_redirect_writes() {
+        use std::os::unix::fs::symlink;
+        let (dir, ws) = wishlist();
+        let victim = dir.path().join("victim.txt");
+        fs::write(&victim, "precious").unwrap();
+        let items = dir.path().join(ITEMS_DIR);
+        fs::create_dir_all(&items).unwrap();
+
+        // the attack from the security review: a link where the temp file would go
+        symlink(&victim, items.join("gift.md.tmp")).unwrap();
+        symlink(&victim, items.join("wishlist-editor-gift.tmp")).unwrap();
+        ws.write_item("gift", "attacker text").unwrap();
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "precious");
+
+        // a linked card is neither listed nor written through
+        symlink(&victim, items.join("linked.md")).unwrap();
+        assert!(ws.list_items().unwrap().iter().all(|i| i.slug != "linked"));
+        assert!(matches!(
+            ws.write_item("linked", "x"),
+            Err(AppError::UnsafeRepo(_))
+        ));
+        assert!(matches!(
+            ws.delete_item("linked"),
+            Err(AppError::UnsafeRepo(_))
+        ));
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "precious");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linked_items_folder_is_refused() {
+        use std::os::unix::fs::symlink;
+        let (dir, ws) = wishlist();
+        let elsewhere = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src/content")).unwrap();
+        symlink(elsewhere.path(), dir.path().join(ITEMS_DIR)).unwrap();
+        assert!(matches!(ws.list_items(), Err(AppError::UnsafeRepo(_))));
+        assert!(matches!(
+            ws.write_item("a", "x"),
+            Err(AppError::UnsafeRepo(_))
+        ));
+        assert_eq!(fs::read_dir(elsewhere.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn other_schema_version_is_read_only() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(CONFIG_FILE), r#"{"schemaVersion":2}"#).unwrap();
+        let ws = Workspace::open(dir.path()).unwrap();
+        assert!(!ws.snapshot().unwrap().writable);
+        assert!(matches!(ws.write_item("a", "x"), Err(AppError::ReadOnly)));
     }
 }

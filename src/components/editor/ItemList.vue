@@ -50,7 +50,7 @@ function subtitle(data: Record<string, unknown>) {
           <TabsTrigger v-for="t in presentTypes" :key="t" :value="t">{{ GIFT_TYPE_LABELS[t] }}</TabsTrigger>
         </TabsList>
       </Tabs>
-      <Button variant="outline" class="w-full" :disabled="store.readOnly" @click="creating = true">
+      <Button variant="outline" class="w-full" :disabled="store.frozen" @click="creating = true">
         <PlusIcon /> Новая карточка
       </Button>
     </div>
