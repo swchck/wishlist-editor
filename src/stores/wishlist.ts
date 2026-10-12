@@ -11,11 +11,13 @@ import {
   type ItemFile,
 } from "@/lib/wishlist/item-file";
 import {
+  checkLocalPhotos,
   ConfigSchema,
   SCHEMA_VERSION,
   validateItem,
   type FieldErrors,
   type GiftType,
+  type ItemData,
   type WishlistConfig,
 } from "@/lib/wishlist/schema";
 import { slugify, uniqueSlug } from "@/lib/wishlist/slug";
@@ -35,12 +37,16 @@ export interface Card {
 
 export type SaveState = "idle" | "pending" | "saving" | "error";
 
-function loadCard(slug: string, text: string): Card {
+function validate(data: Record<string, unknown>, files: ReadonlySet<string>): FieldErrors {
+  const res = validateItem(data);
+  return { ...checkLocalPhotos(data as ItemData, files), ...(res.ok ? {} : res.errors) };
+}
+
+function loadCard(slug: string, text: string, files: ReadonlySet<string>): Card {
   try {
     const file = markRaw(parseItem(text));
     const data = itemData(file);
-    const res = validateItem(data);
-    return { slug, file, data, errors: res.ok ? {} : res.errors, savedText: text };
+    return { slug, file, data, errors: validate(data, files), savedText: text };
   } catch (e) {
     return { slug, file: null, parseError: errorMessage(e), data: {}, errors: {}, savedText: text };
   }
@@ -62,6 +68,7 @@ export const useWishlist = defineStore("wishlist", () => {
   const saveState = ref<SaveState>("idle");
   const saveError = ref<string | null>(null);
   const recent = ref<string[]>(readRecent());
+  let files: ReadonlySet<string> = new Set();
 
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -93,7 +100,8 @@ export const useWishlist = defineStore("wishlist", () => {
     const snap = await api.openWorkspace(path);
     const cfg = ConfigSchema.parse(JSON.parse(snap.configText));
     cards.clear();
-    for (const raw of snap.items) cards.set(raw.slug, loadCard(raw.slug, raw.text));
+    files = new Set(snap.files);
+    for (const raw of snap.items) cards.set(raw.slug, loadCard(raw.slug, raw.text, files));
     root.value = snap.root;
     config.value = cfg;
     selected.value = list.value[0]?.slug ?? null;
@@ -112,8 +120,7 @@ export const useWishlist = defineStore("wishlist", () => {
   function touch(card: Card) {
     const file = card.file!;
     const data = itemData(file);
-    const res = validateItem(data);
-    cards.set(card.slug, { ...card, data, errors: res.ok ? {} : res.errors });
+    cards.set(card.slug, { ...card, data, errors: validate(data, files) });
     schedule(card.slug);
   }
 
@@ -174,7 +181,7 @@ export const useWishlist = defineStore("wishlist", () => {
     const slug = uniqueSlug(slugify(title), new Set(cards.keys()));
     const text = newItemText({ title: title.trim(), type, priority: 3 });
     await api.createItem(slug, text);
-    cards.set(slug, loadCard(slug, text));
+    cards.set(slug, loadCard(slug, text, files));
     selected.value = slug;
     return slug;
   }

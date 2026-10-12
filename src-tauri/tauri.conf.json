@@ -29,6 +29,14 @@
         "img-src": "'self' data: blob: https:",
         "font-src": "'self' data:",
         "connect-src": "ipc: http://ipc.localhost"
+      },
+      "devCsp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' data: blob: https:",
+        "font-src": "'self' data:",
+        "connect-src": "ipc: http://ipc.localhost ws://localhost:1420 http://localhost:1420"
       }
     }
   },

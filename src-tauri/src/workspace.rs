@@ -30,6 +30,8 @@ pub struct Snapshot {
     pub root: String,
     pub config_text: String,
     pub items: Vec<RawItem>,
+    /// Non-card files under the items folder, relative to it, `/`-separated.
+    pub files: Vec<String>,
 }
 
 /// Reports whether `slug` is a valid card file name: lowercase latin, digits and inner dashes.
@@ -81,7 +83,20 @@ impl Workspace {
             root: self.root.to_string_lossy().into_owned(),
             config_text: fs::read_to_string(self.root.join(CONFIG_FILE))?,
             items: self.list_items()?,
+            files: self.list_files()?,
         })
+    }
+
+    /// Returns every non-`.md` file below the items folder (e.g. `images/op-1.webp`),
+    /// so the editor can tell whether a card's local photo exists before the site build does.
+    pub fn list_files(&self) -> AppResult<Vec<String>> {
+        let dir = self.items_dir();
+        let mut out = Vec::new();
+        if dir.is_dir() {
+            collect_files(&dir, &dir, &mut out)?;
+        }
+        out.sort();
+        Ok(out)
     }
 
     /// Returns every `<slug>.md` directly inside the items folder, sorted by slug.
@@ -150,6 +165,28 @@ impl Workspace {
         }
         Ok(fs::rename(src, dst)?)
     }
+}
+
+fn collect_files(base: &Path, dir: &Path, out: &mut Vec<String>) -> AppResult<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        if entry.file_type()?.is_dir() {
+            collect_files(base, &path, out)?;
+        } else if path.extension().is_none_or(|ext| ext != "md") {
+            let rel = path.strip_prefix(base).expect("walk stays under base");
+            out.push(
+                rel.components()
+                    .map(|c| c.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/"),
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Writes via a sibling temp file and rename, so a crash never leaves a half-written card
@@ -275,5 +312,9 @@ mod tests {
             .map(|i| i.slug)
             .collect();
         assert_eq!(slugs, ["ok"]);
+        fs::write(dir.join(".DS_Store"), "x").unwrap();
+        assert_eq!(ws.list_files().unwrap(), ["notes.txt"]);
+        fs::write(dir.join("images/op-1.webp"), "x").unwrap();
+        assert_eq!(ws.list_files().unwrap(), ["images/op-1.webp", "notes.txt"]);
     }
 }

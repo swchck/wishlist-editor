@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { EyeOffIcon, PlusIcon, SearchIcon } from "@lucide/vue";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,6 +17,10 @@ const typeFilter = ref<"all" | GiftType>("all");
 const creating = ref(false);
 
 const presentTypes = computed(() => GIFT_TYPES.filter((t) => store.list.some((c) => (c.data.type ?? "вещь") === t)));
+// tabs hide below two types, so a filter on a vanished type would have no way back
+watch(presentTypes, (types) => {
+  if (typeFilter.value !== "all" && (types.length < 2 || !types.includes(typeFilter.value))) typeFilter.value = "all";
+});
 
 const visible = computed(() => {
   const q = query.value.trim().toLowerCase();

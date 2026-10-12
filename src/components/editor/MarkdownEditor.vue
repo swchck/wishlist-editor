@@ -13,7 +13,9 @@ onMounted(async () => {
   crepe = new Crepe({
     root: root.value!,
     defaultValue: props.value,
-    features: { [Crepe.Feature.Latex]: false, [Crepe.Feature.CodeMirror]: false },
+    // ImageBlock's default upload stores a session-only blob: URL in the markdown;
+    // photos go through the inspector until uploads into images/ exist
+    features: { [Crepe.Feature.Latex]: false, [Crepe.Feature.CodeMirror]: false, [Crepe.Feature.ImageBlock]: false },
     featureConfigs: {
       [Crepe.Feature.Placeholder]: {
         text: "Пожелания по цвету, размеру, альтернативы… Наберите / для блоков",

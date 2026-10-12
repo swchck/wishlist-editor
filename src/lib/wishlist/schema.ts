@@ -90,6 +90,40 @@ export function validateItem(data: unknown): { ok: true; data: ItemData } | { ok
   return { ok: false, errors };
 }
 
+/**
+ * Resolves a card-relative path like `./images/a.webp` against the items folder.
+ * Returns `null` when it points outside that folder.
+ */
+export function resolveItemPath(ref: string): string | null {
+  const parts: string[] = [];
+  for (const seg of ref.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") {
+      if (!parts.length) return null;
+      parts.pop();
+    } else parts.push(seg);
+  }
+  return parts.join("/");
+}
+
+/**
+ * Flags local photos missing from `files` (paths relative to the items folder).
+ * Astro's image() fails the whole site build on a missing file, so this is an error, not a hint.
+ */
+export function checkLocalPhotos(data: Pick<ItemData, "image" | "images">, files: ReadonlySet<string>): FieldErrors {
+  const errors: FieldErrors = {};
+  const check = (ref: unknown, key: string) => {
+    if (typeof ref !== "string" || /^https?:\/\//.test(ref) || !/^\.\.?\//.test(ref)) return;
+    const path = resolveItemPath(ref);
+    if (path === null) errors[key] = "Картинка должна лежать в папке карточек";
+    else if (!files.has(path)) errors[key] = `Файла ${path} нет в папке карточек`;
+  };
+  if (Array.isArray(data.image)) data.image.forEach((r, i) => check(r, `image.${i}`));
+  else check(data.image, "image");
+  data.images?.forEach((r, i) => check(r, `images.${i}`));
+  return errors;
+}
+
 /** Returns every photo of a card in display order, whichever of `image`/`images` holds them. */
 export function photosOf(data: Pick<ItemData, "image" | "images">): string[] {
   const fromImage = data.image === undefined ? [] : Array.isArray(data.image) ? data.image : [data.image];

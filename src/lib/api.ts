@@ -9,6 +9,7 @@ export interface Snapshot {
   root: string;
   configText: string;
   items: RawItem[];
+  files: string[];
 }
 
 /** Error shape produced by the Rust `AppError` serializer. */

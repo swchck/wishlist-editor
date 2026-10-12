@@ -25,7 +25,7 @@ mockIPC(
       case "plugin:dialog|open":
         return ROOT;
       case "open_workspace":
-        return { root: ROOT, configText: CONFIG, items: items() };
+        return { root: ROOT, configText: CONFIG, items: items(), files: ["images/tricky-2.webp"] };
       case "list_items":
         return items();
       case "write_item":

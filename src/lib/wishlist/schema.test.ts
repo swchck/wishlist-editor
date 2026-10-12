@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { photosOf, validateItem } from "./schema";
+import { checkLocalPhotos, photosOf, resolveItemPath, validateItem } from "./schema";
 
 describe("validateItem", () => {
   it("accepts a minimal card and fills defaults", () => {
@@ -26,6 +26,26 @@ describe("validateItem", () => {
   it("keeps unknown keys", () => {
     const res = validateItem({ title: "X", custom: 1 });
     expect(res.ok && res.data.custom).toBe(1);
+  });
+});
+
+describe("checkLocalPhotos", () => {
+  const files = new Set(["images/a.webp"]);
+
+  it("passes remote and existing local photos", () => {
+    expect(checkLocalPhotos({ image: "https://x/y.jpg", images: ["./images/a.webp"] }, files)).toEqual({});
+  });
+
+  it("flags missing and escaping paths by field", () => {
+    expect(checkLocalPhotos({ image: ["./images/b.webp"], images: ["../../x.png"] }, files)).toEqual({
+      "image.0": "Файла images/b.webp нет в папке карточек",
+      "images.0": "Картинка должна лежать в папке карточек",
+    });
+  });
+
+  it("resolves dot segments", () => {
+    expect(resolveItemPath("./images/../images/a.webp")).toBe("images/a.webp");
+    expect(resolveItemPath("../a")).toBeNull();
   });
 });
 
